@@ -3,7 +3,7 @@ import requests
 import re
 import sys
 from datetime import datetime
-from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, CHECK_INTERVAL, SEARCH_PERIOD
+from config_analyst import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, CHECK_INTERVAL, SEARCH_PERIOD, BLACKLISTED_AREAS
 from db import init_db, is_sent, mark_as_sent
 
 try:
@@ -14,10 +14,10 @@ except ImportError:
 
 ALL_IDS = list(APPROVED_COMPANIES.keys())
 session = requests.Session()
-session.headers.update({'User-Agent': 'JobSonarBot/3.14'})
+session.headers.update({'User-Agent': 'JobSonarBot_Analyst/1.1'})
 
 BOT_ID = TG_TOKEN.split(':')[0]
-LAST_UPDATE_ID = 0  # Сюда будем сохранять ID последнего обработанного сообщения
+LAST_UPDATE_ID = 0
 
 def send_telegram(text):
     try:
@@ -28,18 +28,15 @@ def send_telegram(text):
         print(f"⚠️ Ошибка ТГ: {e}")
 
 def init_updates():
-    """Сбрасываем старые сообщения при старте, чтобы не реагировать на старые 'стоп'"""
     global LAST_UPDATE_ID
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates"
         resp = requests.get(url, params={"limit": 1, "offset": -1}, timeout=5).json()
         if resp.get("result"):
             LAST_UPDATE_ID = resp["result"][0]["update_id"]
-            print(f"   [System] Игнорируем старые сообщения до ID: {LAST_UPDATE_ID}")
     except: pass
 
 def check_remote_stop():
-    """Проверяет только НОВЫЕ сообщения на наличие команды СТОП"""
     global LAST_UPDATE_ID
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates"
@@ -51,25 +48,33 @@ def check_remote_stop():
                 msg = update.get("message", {})
                 from_id = str(msg.get("from", {}).get("id", ""))
                 text = msg.get("text", "").lower()
-                
-                # Не реагируем на самого себя
                 if from_id == BOT_ID: continue
-                
                 if str(msg.get("chat", {}).get("id")) == str(TG_CHAT_ID):
-                    if "стоп" in text or "stop" in text:
-                        send_telegram("🛑 <b>Процесс мониторинга завершен. До встречи!</b>")
-                        print("\n[STOP] Работа завершена по команде из Telegram.")
+                    if "стоп" in text:
+                        send_telegram("🛑 <b>Аналитик-бот остановлен.</b>")
                         sys.exit()
-    except Exception as e:
-        pass
+    except: pass
 
-def smart_contains(title, word):
+def smart_contains(text, word):
     word = word.lower()
-    title = title.lower()
-    if bool(re.search('[а-яА-Я]', word)) or len(word) > 3:
-        return word in title
+    text = text.lower()
+    if bool(re.search('[а-яА-Я]', word)): 
+        return word in text
     pattern = r'\b' + re.escape(word) + r'\b'
-    return re.search(pattern, title) is not None
+    return re.search(pattern, text) is not None
+
+def extract_skills(item, target_skills):
+    found = set()
+    # Ищем в названии И в описании
+    search_text = (item.get('name', '') + ' ' + (item.get('snippet', {}).get('requirement', '') or '')).lower()
+    
+    for skill in target_skills:
+        if smart_contains(search_text, skill):
+            if skill in ['sql', 'etl', 'dwh', 'bi', 'api', 'rest', 'soap', 'uml', 'bpmn']:
+                found.add(skill.upper())
+            else:
+                found.add(skill.title())
+    return list(found)
 
 def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period=SEARCH_PERIOD):
     all_items = []
@@ -103,21 +108,33 @@ def process_items(items, role, rules, is_global=False):
         if is_sent(vac_id): continue
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
 
-        has_hr = any(smart_contains(title, w) for w in rules["must_have_hr"])
-        has_role = any(smart_contains(title, w) for w in rules["must_have_role"])
-        is_direct = any(smart_contains(title, x) for x in ['hrd', 'hrbp'])
+        # 🚫 ФИЛЬТР ГЕО (Убираем КЗ и прочих)
+        area_id = item.get('area', {}).get('id', '0')
+        area_name = item.get('area', {}).get('name', '').lower()
+        if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
+            continue
         
-        if not (is_direct or (has_hr and has_role)): continue
+        # 🛠 ПОИСК НАВЫКОВ
+        found_skills = extract_skills(item, rules['target_skills'])
+        
+        # 🔥 ЖЕСТКИЙ ФИЛЬТР: Минимум 2 навыка из списка!
+        # Одинокий "API" больше не пройдет.
+        if len(found_skills) < 2:
+            continue
 
-        # Логика ЗП: если не указана — проходит. Если указана — проверяем порог.
         sal = item.get('salary')
         salary_text = "ЗП не указана"
-        threshold = 250000 if is_global else MIN_SALARY
+        threshold = MIN_SALARY
         
         if sal and sal['from']:
             if sal['currency'] == 'RUR' and sal['from'] < threshold:
                 continue
             salary_text = f"от {sal['from']} {sal.get('currency','₽')}"
+        elif is_global: 
+            # В глобале без ЗП берем только если ОЧЕНЬ много навыков (>=3)
+            # Если 2 навыка и нет ЗП в глобале - скипаем (чтобы мусор не лез)
+            if len(found_skills) < 3:
+                continue
 
         emp = item.get('employer', {})
         cat_raw = APPROVED_COMPANIES.get(str(emp.get('id', '')), {}).get('cat', 'Global')
@@ -130,17 +147,21 @@ def process_items(items, role, rules, is_global=False):
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
 
+        # Сортировка навыков (SQL, Jira, BPMN...)
+        skills_str = ", ".join(sorted(found_skills))
+
         msg = (
-            f"🏢 <b>{emp.get('name')}</b> ({cat_pretty})\n"
-            f"💼 <a href='{item['alternate_url']}'><b>{item['name']}</b></a>\n"
+            f"📊 <b>{title}</b>\n"
+            f"🏢 {emp.get('name')} ({cat_pretty})\n"
+            f"🛠 <b>{skills_str}</b>\n"
             f"📌 {', '.join(details)}\n"
-            f"🎓 Опыт: {item.get('experience', {}).get('name')}\n"
-            f"💰 <b>{salary_text}</b> | 📅 {pub_date}"
+            f"💰 {salary_text} | 📅 {pub_date}\n"
+            f"🔗 <a href='{item['alternate_url']}'>Смотреть вакансию</a>"
         )
         
         send_telegram(msg)
         mark_as_sent(vac_id)
-        print(f"   ✅ ОТПРАВЛЕНО: {title}")
+        print(f"   ✅ НАЙДЕНО: {title} ({skills_str})")
         processed_count += 1
         time.sleep(0.5)
         
@@ -148,45 +169,40 @@ def process_items(items, role, rules, is_global=False):
 
 def main_loop():
     init_db()
-    init_updates() # Сброс старых команд при старте
-    print("🚀 JobSonar v3.14 Started...")
-    send_telegram("🟢 <b>JobSonar v3.14: Мониторинг запущен.</b>")
+    init_updates()
+    print("🚀 Analyst Bot Started...")
+    send_telegram("🧐 <b>Аналитик-бот запущен.</b>\nФильтр: мин. 2 навыка, без 'Системный аналитик'.")
     
     while True:
         check_remote_stop()
-        now = datetime.now().strftime('%H:%M')
-        print(f"\n[{now}] === НОВЫЙ ЦИКЛ ===")
+        print(f"\n[{datetime.now().strftime('%H:%M')}] === НОВЫЙ ЦИКЛ (ANALYST) ===")
         
+        # 1. WHITELIST
         total_white = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
                 for batch_ids in [ALL_IDS[i:i + 20] for i in range(0, len(ALL_IDS), 20)]:
                     check_remote_stop()
-                    # Чистим строку вывода пробелами, чтобы не было "наложений" текста
-                    print(f"🔎 Ключ: {q: <40} | Whitelist...", end='\r')
+                    print(f"🔎 Whitelist: {q: <30}", end='\r')
                     items = []
-                    items.extend(fetch_hh_paginated(q, employer_ids=batch_ids, schedule="remote"))
-                    items.extend(fetch_hh_paginated(q, employer_ids=batch_ids, area=TARGET_AREAS))
+                    items.extend(fetch_hh_paginated(q, employer_ids=batch_ids)) 
                     total_white += process_items(items, role, rules)
 
-        print(f"\n📊 Whitelist завершен: +{total_white}. Переходим к Global...")
-        
+        # 2. GLOBAL (Удаленка > 200к)
+        print(f"\n📊 Whitelist: +{total_white}. Global search...")
         total_global = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
                 check_remote_stop()
-                print(f"🔎 Глобально ищу: {q: <40}", end='\r')
+                print(f"🔎 Global: {q: <30}", end='\r')
                 items = fetch_hh_paginated(q, employer_ids=None, schedule="remote", period=7)
                 total_global += process_items(items, role, rules, is_global=True)
         
-        print(f"\n📊 Глобальный поиск завершен: +{total_global}")
-        send_telegram(f"🏁 <b>Цикл мониторинга завершен</b>\n🔹 Основной: +{total_white}\n🔹 Глобал: +{total_global}")
-        
-        print(f"[{datetime.now().strftime('%H:%M')}] 💤 Спим {CHECK_INTERVAL} сек...")
+        send_telegram(f"🏁 <b>Цикл завершен</b>\n🔹 WL: +{total_white}\n🔹 Global: +{total_global}")
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
     try:
         main_loop()
     except KeyboardInterrupt:
-        print("\n⛔ Остановка скрипта.")
+        print("\n⛔ Stop.")
