@@ -332,6 +332,9 @@ def main_loop():
         
         seconds, next_run = get_smart_sleep_time()
         
+        # --- FIXED: Added variable definition ---
+        now = datetime.now()
+        
         if now.hour >= 23 and daily_counter > 0:
             send_telegram(f"🌙 <b>Итоги дня (Sales):</b> {daily_counter}")
             daily_counter = 0
