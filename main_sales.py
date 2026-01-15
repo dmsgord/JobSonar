@@ -1,0 +1,362 @@
+import time
+import requests
+import re
+import sys
+import signal
+import logging
+import random
+from datetime import datetime, timedelta
+
+from config_sales import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, SEARCH_PERIOD, BLACKLISTED_AREAS, USER_AGENT, DB_NAME
+from db import init_db, is_sent, mark_as_sent, set_db_name
+
+try:
+    from whitelist import APPROVED_COMPANIES
+except ImportError:
+    APPROVED_COMPANIES = {}
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+session = requests.Session()
+session.headers.update({'User-Agent': USER_AGENT})
+
+set_db_name(DB_NAME)
+BOT_ID = TG_TOKEN.split(':')[0] if TG_TOKEN else "0"
+LAST_UPDATE_ID = 0
+
+CAT_ALIASES = {
+    'ГИГАНТЫ': '🏆',
+    'КРУПНЫЕ': '🥇',
+    'СРЕДНИЕ': '🥈',
+    'НЕБОЛЬШИЕ': '🥉',
+    'ОСТАЛЬНЫЕ': '🌐'
+}
+
+def signal_handler(sig, frame):
+    logging.info("🛑 Получен сигнал остановки.")
+    send_telegram("🛑 <b>Sales-мониторинг остановлен</b>")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
+def send_telegram(text):
+    try:
+        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
+                      json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
+                      timeout=10)
+    except Exception as e:
+        logging.error(f"Ошибка ТГ: {e}")
+
+def init_updates():
+    global LAST_UPDATE_ID
+    try:
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates"
+        resp = requests.get(url, params={"limit": 1, "offset": -1}, timeout=5).json()
+        if resp.get("result"):
+            LAST_UPDATE_ID = resp["result"][0]["update_id"]
+    except: pass
+
+def check_remote_stop():
+    global LAST_UPDATE_ID
+    try:
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates"
+        params = {"limit": 5, "offset": LAST_UPDATE_ID + 1}
+        resp = requests.get(url, params=params, timeout=5).json()
+        if resp.get("result"):
+            for update in resp["result"]:
+                LAST_UPDATE_ID = update["update_id"]
+                msg = update.get("message", {})
+                from_id = str(msg.get("from", {}).get("id", ""))
+                text = msg.get("text", "").lower()
+                if from_id == BOT_ID: continue
+                if str(msg.get("chat", {}).get("id")) == str(TG_CHAT_ID):
+                    if "стоп" in text:
+                        send_telegram("🛑 <b>Sales-бот остановлен</b>")
+                        sys.exit(0)
+    except: pass
+
+def smart_contains(text, word):
+    word = word.lower()
+    text = text.lower()
+    if len(word) <= 3 and not bool(re.search('[а-яА-Я]', word)):
+        pattern = r'\b' + re.escape(word) + r'\b'
+        return re.search(pattern, text) is not None
+    return word in text
+
+def is_individual_person(emp_name):
+    """
+    Детектор Физлиц v4.0 (Anti-Surname + Bugfix)
+    """
+    name_lower = emp_name.lower().strip()
+    
+    # 1. Прямые маркеры
+    if name_lower.startswith('ип ') or ' ип' in name_lower: return True
+    if '.' in name_lower: return True # Иванов И.И.
+    
+    parts = name_lower.split()
+
+    # 2. ПРИОРИТЕТНАЯ проверка на Отчество (Чинит баг с "IT" внутри "V-IT-alievich")
+    for part in parts:
+        if part.endswith('вич') or part.endswith('вна'): return True
+        if part.endswith('оглы') or part.endswith('кызы'): return True
+
+    # 3. Проверка на Одинокую Фамилию (Чинит "Батыршаева")
+    if len(parts) == 1:
+        # Типичные окончания фамилий
+        surname_endings = ('ов', 'ова', 'ев', 'ева', 'ин', 'ина', 'ский', 'ская', 'ая', 'ый')
+        if name_lower.endswith(surname_endings):
+            # Но не баним слова типа "Снаб", "Спец", "Торг", "Пром"
+            safe_singles = ['снаб', 'торг', 'пром', 'строй', 'групп', 'group', 'софт', 'soft']
+            if not any(s in name_lower for s in safe_singles):
+                 return True
+
+    # 4. Белый список корпоративных маркеров
+    # Если мы дошли сюда, значит отчеств нет. Можно проверять маркеры.
+    corp_whitelist = [
+        'ооо', 'ао', 'пао', 'зао', 'llc', 'ltd', 'inc', 'gmbh',
+        'групп', 'group', 'холдинг', 'holding',
+        'софт', 'soft', 'tech', 'тех', 'lab', 'лаб', 'it', 'ит',
+        'studio', 'студия', 'agency', 'агентство', 'бюро', 'центр', 'center',
+        'school', 'школа', 'academy', 'академия', 'университет', 'институт',
+        'сервис', 'service', 'систем', 'system', 'solution', 'решени',
+        'digital', 'диджитал', 'media', 'медиа', 'marketing', 'маркетинг',
+        'team', 'команда', 'company', 'компания', 'партнер', 'partner',
+        'завод', 'фабрика', 'банк', 'bank', 'shop', 'магазин',
+        'consult', 'консалт', 'invest', 'инвест', 'trade', 'трейд',
+        'network', 'сеть', 'mobile', 'мобайл', 'dev', 'web', 'веб',
+        'club', 'клуб', 'platform', 'платформ', 'pro', 'про',
+        'онлайн', 'online', 'business', 'бизнес'
+    ]
+    
+    if any(marker in name_lower for marker in corp_whitelist):
+        return False
+            
+    # 5. Если маркеров нет, а слов 2-4 -> Считаем человеком (Имя Фамилия)
+    if 2 <= len(parts) <= 4:
+        if bool(re.search('[а-я]', name_lower)):
+            return True
+            
+    return False
+
+def check_domain_relevance(item, markers, stop_domains):
+    snippet = item.get('snippet', {}) or {}
+    req = snippet.get('requirement') or ''
+    resp = snippet.get('responsibility') or ''
+    full_text = (item.get('name', '') + ' ' + req + ' ' + resp).lower()
+    
+    for stop in stop_domains:
+        if smart_contains(full_text, stop):
+            return False 
+            
+    has_digital = False
+    for marker in markers:
+        if smart_contains(full_text, marker):
+            has_digital = True
+            break
+            
+    return has_digital
+
+def fetch_hh_paginated(text, schedule=None, period=SEARCH_PERIOD):
+    all_items = []
+    page = 0
+    params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period}
+    if schedule: params["schedule"] = schedule
+
+    while page < 20:
+        params["page"] = page
+        try:
+            resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
+            data = resp.json()
+            items = data.get("items", [])
+            if not items: break
+            all_items.extend(items)
+            if page >= data.get('pages', 0) - 1: break
+            page += 1
+            time.sleep(random.uniform(0.5, 1.5))
+        except Exception as e:
+            logging.error(f"HH API Error: {e}")
+            break
+    return all_items
+
+def get_clean_category(cat_raw):
+    clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
+    return CAT_ALIASES.get(clean, '🌐')
+
+def process_items(items, role, rules, is_global=False):
+    processed_count = 0
+    unique_items = {v['id']: v for v in items}.values()
+    
+    spam_deduplication_cache = set()
+
+    for item in unique_items:
+        vac_id = item['id']
+        title = item['name']
+        title_lower = title.lower()
+
+        if is_sent(vac_id): continue
+        if any(stop_w in title_lower for stop_w in rules["stop_words_title"]): continue
+
+        emp = item.get('employer', {})
+        emp_name = emp.get('name', '')
+        emp_id = str(emp.get('id', ''))
+        
+        # Anti-Spam (Deduplication)
+        spam_signature = f"{emp_id}_{title_lower}"
+        if spam_signature in spam_deduplication_cache:
+            mark_as_sent(vac_id)
+            logging.info(f"♻️ Спам-фильтр: Скрыт дубль {title} (ID: {vac_id})")
+            continue
+        else:
+            spam_deduplication_cache.add(spam_signature)
+
+        # 1. Фильтр ИПшников v4.0
+        if is_individual_person(emp_name):
+            continue
+
+        details = []
+        raw_schedule = item.get('schedule', {})
+        raw_formats = item.get('work_format', [])
+        
+        if raw_schedule:
+             if raw_schedule.get('name') not in [f['name'] for f in raw_formats]:
+                 details.append(raw_schedule.get('name'))
+        for f in raw_formats:
+            details.append(f['name'])
+
+        details_text = ", ".join(details).lower()
+        stop_location_markers = ['гибрид', 'hybrid', 'офис', 'office', 'на месте', 'месте', 'территори', 'разъезд', 'travel']
+        
+        has_office_marker = any(x in details_text for x in stop_location_markers)
+        is_remote_explicit = 'удален' in details_text or 'remote' in details_text
+
+        # 2. Только чистая удаленка
+        if not (is_remote_explicit and not has_office_marker):
+            continue
+            
+        # 3. Только Digital сферы
+        if not check_domain_relevance(item, rules['digital_markers'], rules['stop_domains']):
+            continue
+
+        sal = item.get('salary')
+        salary_text = "-"
+        is_bold_salary = False
+        threshold = MIN_SALARY
+        salary_value = 0
+        
+        if sal and sal['from']:
+            # --- ВАЛЮТНЫЙ ФИЛЬТР ---
+            # Пропускаем, если валюта не Рубль, Доллар или Евро
+            if sal['currency'] not in ['RUR', 'USD', 'EUR']:
+                continue
+
+            if sal['currency'] == 'RUR':
+                 if sal['from'] < threshold:
+                     continue 
+                 salary_text = f"от {sal['from']} {sal.get('currency','₽')}"
+                 is_bold_salary = True
+                 salary_value = sal['from']
+            else:
+                 # USD / EUR
+                 salary_text = f"от {sal['from']} {sal.get('currency')}"
+                 is_bold_salary = True
+                 salary_value = 999999 
+        
+        cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
+        cat_emoji = get_clean_category(cat_raw)
+        
+        is_whitelist = emp_id in APPROVED_COMPANIES
+        
+        dt = item.get('published_at', '').split('T')[0]
+        pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
+        
+        fire_marker = "🤝 " 
+        if is_whitelist and salary_value >= threshold:
+             fire_marker = "🔥 "
+
+        salary_html = f"<b>{salary_text}</b>" if is_bold_salary else salary_text
+
+        msg = (
+            f"{fire_marker}{cat_emoji} <b>{emp.get('name')}</b>\n\n"
+            f"<a href='{item['alternate_url']}'><b>{item['name']}</b></a>\n\n"
+            f"📌 {', '.join(details)}\n"
+            f"💰 {salary_html} | 🗓 {pub_date}"
+        )
+        
+        send_telegram(msg)
+        mark_as_sent(vac_id)
+        logging.info(f"✅ Found Sales: {title} [ID: {vac_id}]")
+        processed_count += 1
+        time.sleep(0.5)
+    return processed_count
+
+def get_smart_sleep_time():
+    now = datetime.now()
+    if now.weekday() >= 5: 
+        if now.hour < 11:
+             target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+        elif now.hour < 23:
+             target = now.replace(hour=23, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+        else:
+             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+    else: 
+        if now.hour >= 23 or now.hour < 7:
+             base_date = now if now.hour < 7 else now + timedelta(days=1)
+             target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 30))
+        elif 7 <= now.hour < 10:
+             minutes_wait = 60 + random.randint(-10, 15)
+             target = now + timedelta(minutes=minutes_wait)
+        elif 10 <= now.hour < 20:
+             minutes_wait = 40 + random.randint(-5, 10)
+             target = now + timedelta(minutes=minutes_wait)
+        else:
+             minutes_wait = 60 + random.randint(-5, 20)
+             target = now + timedelta(minutes=minutes_wait)
+
+    if target <= now:
+        target = now + timedelta(minutes=5)
+    return max(10, (target - now).total_seconds()), target
+
+def main_loop():
+    init_db()
+    init_updates()
+    logging.info("🚀 Sales Bot v1.9 (KZT & Surnames Fix) Started")
+    send_telegram("🟢 <b>Sales-мониторинг запущен (No KZT, No Surnames)</b>")
+    
+    while True:
+        check_remote_stop()
+        logging.info("=== Старт проверки (Sales) ===")
+        
+        total = 0
+        for role, rules in PROFILES.items():
+            for q in rules["keywords"]:
+                check_remote_stop()
+                items = fetch_hh_paginated(q, schedule="remote", period=7)
+                if items:
+                    logging.info(f"🔎 Checking '{q}' (Found {len(items)} raw items)")
+                    total += process_items(items, role, rules, is_global=True)
+        
+        report = f"🏁 Цикл Sales завершен. Найдено: +{total}"
+        logging.info(report)
+        
+        if total > 0:
+            send_telegram(report)
+
+        seconds, next_run = get_smart_sleep_time()
+        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')}")
+        
+        while seconds > 0:
+            check_remote_stop()
+            sleep_chunk = min(seconds, 60)
+            time.sleep(sleep_chunk)
+            seconds -= sleep_chunk
+
+if __name__ == "__main__":
+    try:
+        main_loop()
+    except KeyboardInterrupt:
+        pass

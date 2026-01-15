@@ -4,6 +4,7 @@ import re
 import sys
 import signal
 import logging
+import random
 from datetime import datetime, timedelta
 
 from config_analyst import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, SEARCH_PERIOD, BLACKLISTED_AREAS, USER_AGENT, DB_NAME, TARGET_AREAS
@@ -118,7 +119,7 @@ def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period
             all_items.extend(items)
             if page >= data.get('pages', 0) - 1: break
             page += 1
-            time.sleep(0.3)
+            time.sleep(random.uniform(0.5, 1.5))
         except Exception as e:
             logging.error(f"HH API Error: {e}")
             break
@@ -140,15 +141,42 @@ def process_items(items, role, rules, is_global=False):
         if is_sent(vac_id): continue
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
 
+        # --- 1. АНАЛИЗ ГРАФИКА И РЕГИОНА ---
+        details = []
+        raw_schedule = item.get('schedule', {})
+        raw_formats = item.get('work_format', [])
+        
+        if raw_schedule:
+             if raw_schedule.get('name') not in [f['name'] for f in raw_formats]:
+                 details.append(raw_schedule.get('name'))
+        for f in raw_formats:
+            details.append(f['name'])
+
+        details_text = ", ".join(details).lower()
+        has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid'])
+        is_remote_explicit = 'удален' in details_text or 'remote' in details_text
+
+        # Определяем "Чистую удаленку" (как для огоньков)
+        is_clean_remote = is_remote_explicit and not has_office_marker
+
+        # ⛔ ГЛОБАЛ ФИЛЬТР: Только чистая удаленка
+        if is_global and has_office_marker:
+            continue
+
+        # ⛔ ГЕО ФИЛЬТР: Игнорируем регион ТОЛЬКО если это "Чистая удаленка"
+        # Если это гибрид или офис - проверяем Blacklist
         area_id = item.get('area', {}).get('id', '0')
         area_name = item.get('area', {}).get('name', '').lower()
-        if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
-            continue
         
+        if not is_clean_remote:
+            if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
+                continue
+        
+        # --- 2. НАВЫКИ ---
         found_skills = extract_skills(item, rules['target_skills'])
-        
         if len(found_skills) < 2: continue
 
+        # --- 3. ЗАРПЛАТА ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -167,8 +195,12 @@ def process_items(items, role, rules, is_global=False):
             else: 
                 continue 
         
+        # --- 4. ПРОВЕРКА БЕЗ ЗП ---
         if not has_good_salary:
-            if len(found_skills) < 3: continue
+            weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
+            is_weak_only = all(skill in weak_stack for skill in found_skills)
+            if is_weak_only:
+                continue 
         
         emp = item.get('employer', {})
         emp_id = str(emp.get('id', ''))
@@ -181,23 +213,10 @@ def process_items(items, role, rules, is_global=False):
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         skills_str = ", ".join(sorted(found_skills))
-        
-        details = []
-        raw_schedule = item.get('schedule', {})
-        raw_formats = item.get('work_format', [])
-        
-        if raw_schedule:
-             if raw_schedule.get('name') not in [f['name'] for f in raw_formats]:
-                 details.append(raw_schedule.get('name'))
-        for f in raw_formats:
-            details.append(f['name'])
-
-        details_text = ", ".join(details).lower()
-        has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid'])
-        is_remote_explicit = 'удален' in details_text or 'remote' in details_text
 
         fire_marker = ""
-        if is_whitelist and is_remote_explicit and not has_office_marker:
+        # Тут логика та же самая: чистая удаленка + топ зарплата = огонь
+        if is_whitelist and is_clean_remote:
             if salary_value > 250000:
                 if cat_emoji == '🏆':
                     fire_marker = "🔥🔥🔥 "
@@ -223,37 +242,40 @@ def process_items(items, role, rules, is_global=False):
         time.sleep(0.5)
     return processed_count
 
-def get_daily_slots(date_obj):
-    is_weekend = date_obj.weekday() >= 5
-    slots = []
-    if is_weekend:
-        slots.append(date_obj.replace(hour=11, minute=10, second=0, microsecond=0))
-        slots.append(date_obj.replace(hour=23, minute=10, second=0, microsecond=0))
-    else:
-        current = date_obj.replace(hour=7, minute=10, second=0, microsecond=0)
-        end_time = date_obj.replace(hour=23, minute=10, second=0, microsecond=0)
-        while current <= end_time:
-            slots.append(current)
-            if current.hour < 10: step = 60
-            elif 10 <= current.hour < 20: step = 40
-            else: step = 60
-            current += timedelta(minutes=step)
-    return slots
-
-def get_wait_time():
+def get_smart_sleep_time():
     now = datetime.now()
-    slots_today = get_daily_slots(now)
-    for slot in slots_today:
-        if slot > now: return (slot - now).total_seconds(), slot
-    tomorrow = now + timedelta(days=1)
-    slots_tomorrow = get_daily_slots(tomorrow)
-    return (slots_tomorrow[0] - now).total_seconds(), slots_tomorrow[0]
+    if now.weekday() >= 5: 
+        if now.hour < 11:
+             target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+        elif now.hour < 23:
+             target = now.replace(hour=23, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+        else:
+             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+    else: 
+        if now.hour >= 23 or now.hour < 7:
+             base_date = now if now.hour < 7 else now + timedelta(days=1)
+             target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 30))
+        elif 7 <= now.hour < 10:
+             minutes_wait = 60 + random.randint(-10, 15)
+             target = now + timedelta(minutes=minutes_wait)
+        elif 10 <= now.hour < 20:
+             minutes_wait = 40 + random.randint(-5, 10)
+             target = now + timedelta(minutes=minutes_wait)
+        else:
+             minutes_wait = 60 + random.randint(-5, 20)
+             target = now + timedelta(minutes=minutes_wait)
+
+    if target <= now:
+        target = now + timedelta(minutes=5)
+        
+    seconds_to_sleep = (target - now).total_seconds()
+    return max(10, seconds_to_sleep), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Analyst Bot v4.28 Started")
-    send_telegram("🟢 <b>Analyst-мониторинг запущен (v4.28)</b>")
+    logging.info("🚀 Analyst Bot v4.33 Started")
+    send_telegram("🟢 <b>Analyst-мониторинг запущен (v4.33)</b>")
     
     while True:
         check_remote_stop()
@@ -290,8 +312,8 @@ def main_loop():
         if (total_white + total_global) > 0:
             send_telegram(report)
 
-        seconds, next_run = get_wait_time()
-        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')}")
+        seconds, next_run = get_smart_sleep_time()
+        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')} (Human interval)")
         
         while seconds > 0:
             check_remote_stop()
