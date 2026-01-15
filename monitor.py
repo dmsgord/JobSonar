@@ -33,9 +33,13 @@ BOTS = {
 
 # --- ЛОГИКА ---
 def check_process(script_name):
+    """Проверяет, запущен ли процесс с указанным именем скрипта"""
     try:
+        # Получаем список всех процессов
         output = subprocess.check_output(["ps", "-ax"]).decode()
-        return f"python3 {script_name}" in output
+        # Ищем имя файла (например, main.py) в строке процесса.
+        # Это сработает, даже если запуск был через 'python3 -u main.py'
+        return script_name in output
     except:
         return False
 
@@ -54,6 +58,7 @@ def get_last_error_log(logfile):
     try:
         with open(logfile, "r", encoding="utf-8", errors='ignore') as f:
             lines = f.readlines()
+            # Берем последние 8 строк
             last_lines = lines[-8:] if len(lines) > 8 else lines
             return "".join(last_lines).strip()
     except Exception as e:
@@ -140,4 +145,5 @@ def background_checker():
 if __name__ == "__main__":
     threading.Thread(target=background_checker, daemon=True).start()
     print("🤖 Monitor Bot (с авто-очисткой логов) запускается...")
+    # infinity_polling защищает от разрывов соединения
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
