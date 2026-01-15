@@ -1,28 +1,28 @@
+import telebot
+from telebot import types
 import subprocess
-import requests
 import os
-import sys
+import time
+import threading
+from datetime import datetime
 
 # --- НАСТРОЙКИ ---
 MONITOR_TOKEN = "8250592662:AAGMMdrApsy-dWyXM1T60tcd4ACLA-sqxDE"
-CHAT_ID = "-5101296808"
+ADMIN_CHAT_ID = "-5101296808"
 
-# Словарь: Имя скрипта -> (Название для людей, Имя файла-статуса)
+# Список ботов: (Имя скрипта) -> (Имя для отчета, Файл статуса)
 BOTS = {
     "main.py":         ("HR Bot",      "status_hr.txt"),
     "main_analyst.py": ("Analyst Bot", "status_analyst.txt"),
     "main_sales.py":   ("Sales Bot",   "status_sales.txt")
 }
 
-def send_tg(text):
-    try:
-        url = f"https://api.telegram.org/bot{MONITOR_TOKEN.strip()}/sendMessage"
-        requests.post(url, json={"chat_id": CHAT_ID.strip(), "text": text, "parse_mode": "HTML"})
-    except Exception as e:
-        print(f"Ошибка отправки: {e}")
+bot = telebot.TeleBot(MONITOR_TOKEN)
 
+# --- ЛОГИКА ---
 def check_process(script_name):
     try:
+        # Проверяем список процессов
         output = subprocess.check_output(["ps", "-ax"]).decode()
         return f"python3 {script_name}" in output
     except:
@@ -34,11 +34,11 @@ def get_status_text(filename):
             with open(filename, "r", encoding="utf-8") as f:
                 return f.read().strip()
         except:
-            return "Ошибка чтения файла"
+            return "Ошибка чтения"
     else:
-        return "⏳ Жду обновления..."
+        return "⏳ Нет данных"
 
-def run_check():
+def generate_report():
     report = []
     all_alive = True
     
@@ -52,14 +52,69 @@ def run_check():
             report.append(f"❌ <b>{name}</b>: DOWN ⚠️")
             all_alive = False
             
-    msg = "\n\n".join(report)
+    timestamp = datetime.now().strftime("%H:%M:%S")
     
     if all_alive:
-        header = "🛡 <b>Системный статус: ОК</b>"
+        header = f"🛡 <b>Система в норме</b> (Обновлено: {timestamp})"
     else:
-        header = "🚨 <b>ВНИМАНИЕ! СБОЙ!</b>"
+        header = f"🚨 <b>ЕСТЬ ПРОБЛЕМЫ!</b> (Обновлено: {timestamp})"
         
-    send_tg(f"{header}\n\n{msg}")
+    return f"{header}\n\n" + "\n\n".join(report)
+
+# --- КЛАВИАТУРА ---
+def get_keyboard():
+    markup = types.InlineKeyboardMarkup()
+    btn = types.InlineKeyboardButton("🔄 Обновить статус", callback_data="refresh")
+    markup.add(btn)
+    return markup
+
+# --- ОБРАБОТЧИКИ TELEGRAM ---
+@bot.message_handler(commands=['start', 'status'])
+def send_status(message):
+    try:
+        text = generate_report()
+        bot.send_message(message.chat.id, text, reply_markup=get_keyboard(), parse_mode="HTML")
+    except Exception as e:
+        print(f"Ошибка отправки: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "refresh")
+def refresh_callback(call):
+    new_text = generate_report()
+    try:
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=new_text,
+            reply_markup=get_keyboard(),
+            parse_mode="HTML"
+        )
+    except:
+        # Если текст не изменился, Телеграм кидает ошибку. Игнорируем её.
+        pass
+    
+    # Убираем значок "часиков" с кнопки
+    bot.answer_callback_query(call.id, "Данные обновлены!")
+
+# --- ФОНОВАЯ ПРОВЕРКА (Раз в 30 мин) ---
+def background_checker():
+    while True:
+        time.sleep(1800) # 30 минут
+        try:
+            text = generate_report()
+            # Если есть упавшие боты — шлем уведомление сами
+            if "❌" in text:
+                bot.send_message(ADMIN_CHAT_ID, f"🚨 <b>АВТО-ТРЕВОГА!</b>\n\n{text}", parse_mode="HTML")
+        except:
+            pass
 
 if __name__ == "__main__":
-    run_check()
+    # Запуск фонового потока
+    threading.Thread(target=background_checker, daemon=True).start()
+    
+    print("🤖 Monitor Bot с кнопкой запущен...")
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=2)
+        except Exception as e:
+            print(f"Ошибка поллинга: {e}")
+            time.sleep(5)
