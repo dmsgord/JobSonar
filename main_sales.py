@@ -81,42 +81,39 @@ def check_remote_stop():
     except: pass
 
 def smart_contains(text, word):
-    word = word.lower()
-    text = text.lower()
-    if len(word) <= 3 and not bool(re.search('[а-яА-Я]', word)):
-        pattern = r'\b' + re.escape(word) + r'\b'
-        return re.search(pattern, text) is not None
-    return word in text
+    word_lower = word.lower()
+    text_lower = text.lower()
+    if len(word_lower) <= 3 and word_lower.isascii():
+        return re.search(r'\b' + re.escape(word_lower) + r'\b', text_lower) is not None
+    return word_lower in text_lower
 
 def is_individual_person(emp_name):
     """
-    Детектор Физлиц v4.0 (Anti-Surname + Bugfix)
+    Детектор Физлиц v5.0 (Дефисы, Anti-Surname)
     """
     name_lower = emp_name.lower().strip()
     
     # 1. Прямые маркеры
     if name_lower.startswith('ип ') or ' ип' in name_lower: return True
-    if '.' in name_lower: return True # Иванов И.И.
+    if '.' in name_lower: return True 
     
-    parts = name_lower.split()
+    # FIX: Правильное разбиение по пробелам И дефисам
+    parts = re.split(r'[\s-]+', name_lower)
 
-    # 2. ПРИОРИТЕТНАЯ проверка на Отчество (Чинит баг с "IT" внутри "V-IT-alievich")
+    # 2. ПРИОРИТЕТНАЯ проверка на Отчество
     for part in parts:
         if part.endswith('вич') or part.endswith('вна'): return True
         if part.endswith('оглы') or part.endswith('кызы'): return True
 
-    # 3. Проверка на Одинокую Фамилию (Чинит "Батыршаева")
+    # 3. Проверка на Одинокую Фамилию
     if len(parts) == 1:
-        # Типичные окончания фамилий
         surname_endings = ('ов', 'ова', 'ев', 'ева', 'ин', 'ина', 'ский', 'ская', 'ая', 'ый')
         if name_lower.endswith(surname_endings):
-            # Но не баним слова типа "Снаб", "Спец", "Торг", "Пром"
             safe_singles = ['снаб', 'торг', 'пром', 'строй', 'групп', 'group', 'софт', 'soft']
             if not any(s in name_lower for s in safe_singles):
                  return True
 
     # 4. Белый список корпоративных маркеров
-    # Если мы дошли сюда, значит отчеств нет. Можно проверять маркеры.
     corp_whitelist = [
         'ооо', 'ао', 'пао', 'зао', 'llc', 'ltd', 'inc', 'gmbh',
         'групп', 'group', 'холдинг', 'holding',
@@ -136,7 +133,7 @@ def is_individual_person(emp_name):
     if any(marker in name_lower for marker in corp_whitelist):
         return False
             
-    # 5. Если маркеров нет, а слов 2-4 -> Считаем человеком (Имя Фамилия)
+    # 5. Если маркеров нет, а слов 2-4 -> Считаем человеком
     if 2 <= len(parts) <= 4:
         if bool(re.search('[а-я]', name_lower)):
             return True
@@ -167,7 +164,7 @@ def fetch_hh_paginated(text, schedule=None, period=SEARCH_PERIOD):
     params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period}
     if schedule: params["schedule"] = schedule
 
-    while page < 20:
+    while page < 10:
         params["page"] = page
         try:
             resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
@@ -177,7 +174,7 @@ def fetch_hh_paginated(text, schedule=None, period=SEARCH_PERIOD):
             all_items.extend(items)
             if page >= data.get('pages', 0) - 1: break
             page += 1
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(random.uniform(0.3, 1.0))
         except Exception as e:
             logging.error(f"HH API Error: {e}")
             break
@@ -191,6 +188,7 @@ def process_items(items, role, rules, is_global=False):
     processed_count = 0
     unique_items = {v['id']: v for v in items}.values()
     
+    # FIX: Кеш теперь локальный для каждого цикла (чтобы не текла память)
     spam_deduplication_cache = set()
 
     for item in unique_items:
@@ -205,7 +203,7 @@ def process_items(items, role, rules, is_global=False):
         emp_name = emp.get('name', '')
         emp_id = str(emp.get('id', ''))
         
-        # Anti-Spam (Deduplication)
+        # Anti-Spam
         spam_signature = f"{emp_id}_{title_lower}"
         if spam_signature in spam_deduplication_cache:
             mark_as_sent(vac_id)
@@ -214,7 +212,7 @@ def process_items(items, role, rules, is_global=False):
         else:
             spam_deduplication_cache.add(spam_signature)
 
-        # 1. Фильтр ИПшников v4.0
+        # 1. Фильтр ИПшников
         if is_individual_person(emp_name):
             continue
 
@@ -249,8 +247,7 @@ def process_items(items, role, rules, is_global=False):
         salary_value = 0
         
         if sal and sal['from']:
-            # --- ВАЛЮТНЫЙ ФИЛЬТР ---
-            # Пропускаем, если валюта не Рубль, Доллар или Евро
+            # Валютный фильтр (Жесткий)
             if sal['currency'] not in ['RUR', 'USD', 'EUR']:
                 continue
 
@@ -261,7 +258,6 @@ def process_items(items, role, rules, is_global=False):
                  is_bold_salary = True
                  salary_value = sal['from']
             else:
-                 # USD / EUR
                  salary_text = f"от {sal['from']} {sal.get('currency')}"
                  is_bold_salary = True
                  salary_value = 999999 
@@ -324,34 +320,41 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Sales Bot v1.9 (KZT & Surnames Fix) Started")
-    send_telegram("🟢 <b>Sales-мониторинг запущен (No KZT, No Surnames)</b>")
+    logging.info("🚀 Sales Bot v5.1 (Optimized) Started")
+    send_telegram("🟢 <b>Sales-мониторинг запущен (Server Ready)</b>")
+    
+    daily_counter = 0
     
     while True:
         check_remote_stop()
         logging.info("=== Старт проверки (Sales) ===")
         
-        total = 0
+        cycle_found = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
                 check_remote_stop()
                 items = fetch_hh_paginated(q, schedule="remote", period=7)
                 if items:
                     logging.info(f"🔎 Checking '{q}' (Found {len(items)} raw items)")
-                    total += process_items(items, role, rules, is_global=True)
+                    cycle_found += process_items(items, role, rules, is_global=True)
         
-        report = f"🏁 Цикл Sales завершен. Найдено: +{total}"
-        logging.info(report)
+        daily_counter += cycle_found
+        logging.info(f"🏁 Цикл Sales завершен. +{cycle_found} (Всего за день: {daily_counter})")
         
-        if total > 0:
-            send_telegram(report)
-
         seconds, next_run = get_smart_sleep_time()
+        
+        # === ИТОГИ ДНЯ ===
+        now = datetime.now()
+        if now.hour >= 23 and daily_counter > 0:
+            send_telegram(f"🌙 <b>Итоги дня (Sales):</b>\nНайдено вакансий: {daily_counter}")
+            daily_counter = 0
+        
         logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')}")
         
         while seconds > 0:
             check_remote_stop()
-            sleep_chunk = min(seconds, 60)
+            # FIX: Быстрая проверка каждые 10 секунд
+            sleep_chunk = min(seconds, 10)
             time.sleep(sleep_chunk)
             seconds -= sleep_chunk
 

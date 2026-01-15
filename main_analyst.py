@@ -83,12 +83,11 @@ def check_remote_stop():
     except: pass
 
 def smart_contains(text, word):
-    word = word.lower()
-    text = text.lower()
-    if bool(re.search('[а-яА-Я]', word)): 
-        return word in text
-    pattern = r'\b' + re.escape(word) + r'\b'
-    return re.search(pattern, text) is not None
+    word_lower = word.lower()
+    text_lower = text.lower()
+    if len(word_lower) <= 3 and word_lower.isascii():
+        return re.search(r'\b' + re.escape(word_lower) + r'\b', text_lower) is not None
+    return word_lower in text_lower
 
 def extract_skills(item, target_skills):
     found = set()
@@ -109,7 +108,7 @@ def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period
     if area: params["area"] = area
     if schedule: params["schedule"] = schedule
 
-    while page < 20:
+    while page < 10:
         params["page"] = page
         try:
             resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
@@ -119,7 +118,7 @@ def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period
             all_items.extend(items)
             if page >= data.get('pages', 0) - 1: break
             page += 1
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(random.uniform(0.3, 1.0))
         except Exception as e:
             logging.error(f"HH API Error: {e}")
             break
@@ -141,7 +140,6 @@ def process_items(items, role, rules, is_global=False):
         if is_sent(vac_id): continue
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
 
-        # --- 1. АНАЛИЗ ГРАФИКА И РЕГИОНА ---
         details = []
         raw_schedule = item.get('schedule', {})
         raw_formats = item.get('work_format', [])
@@ -155,16 +153,10 @@ def process_items(items, role, rules, is_global=False):
         details_text = ", ".join(details).lower()
         has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid'])
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
-
-        # Определяем "Чистую удаленку" (как для огоньков)
         is_clean_remote = is_remote_explicit and not has_office_marker
 
-        # ⛔ ГЛОБАЛ ФИЛЬТР: Только чистая удаленка
-        if is_global and has_office_marker:
-            continue
+        if is_global and has_office_marker: continue
 
-        # ⛔ ГЕО ФИЛЬТР: Игнорируем регион ТОЛЬКО если это "Чистая удаленка"
-        # Если это гибрид или офис - проверяем Blacklist
         area_id = item.get('area', {}).get('id', '0')
         area_name = item.get('area', {}).get('name', '').lower()
         
@@ -172,11 +164,9 @@ def process_items(items, role, rules, is_global=False):
             if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
                 continue
         
-        # --- 2. НАВЫКИ ---
         found_skills = extract_skills(item, rules['target_skills'])
         if len(found_skills) < 2: continue
 
-        # --- 3. ЗАРПЛАТА ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -195,19 +185,15 @@ def process_items(items, role, rules, is_global=False):
             else: 
                 continue 
         
-        # --- 4. ПРОВЕРКА БЕЗ ЗП ---
         if not has_good_salary:
             weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
             is_weak_only = all(skill in weak_stack for skill in found_skills)
-            if is_weak_only:
-                continue 
+            if is_weak_only: continue 
         
         emp = item.get('employer', {})
         emp_id = str(emp.get('id', ''))
-        
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
         cat_emoji = get_clean_category(cat_raw)
-        
         is_whitelist = emp_id in APPROVED_COMPANIES
         
         dt = item.get('published_at', '').split('T')[0]
@@ -215,13 +201,9 @@ def process_items(items, role, rules, is_global=False):
         skills_str = ", ".join(sorted(found_skills))
 
         fire_marker = ""
-        # Тут логика та же самая: чистая удаленка + топ зарплата = огонь
         if is_whitelist and is_clean_remote:
             if salary_value > 250000:
-                if cat_emoji == '🏆':
-                    fire_marker = "🔥🔥🔥 "
-                else:
-                    fire_marker = "🔥🔥 "
+                fire_marker = "🔥🔥🔥 " if cat_emoji == '🏆' else "🔥🔥 "
             else:
                 fire_marker = "🔥 "
 
@@ -267,21 +249,21 @@ def get_smart_sleep_time():
 
     if target <= now:
         target = now + timedelta(minutes=5)
-        
-    seconds_to_sleep = (target - now).total_seconds()
-    return max(10, seconds_to_sleep), target
+    return max(10, (target - now).total_seconds()), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Analyst Bot v4.33 Started")
-    send_telegram("🟢 <b>Analyst-мониторинг запущен (v4.33)</b>")
+    logging.info("🚀 Analyst Bot v5.1 (Optimized) Started")
+    send_telegram("🟢 <b>Analyst-мониторинг запущен (Server Ready)</b>")
     
+    daily_counter = 0
+
     while True:
         check_remote_stop()
         logging.info("=== Старт проверки (Analyst) ===")
         
-        total_white = 0
+        cycle_found = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
                 for batch_ids in [ALL_IDS[i:i + 20] for i in range(0, len(ALL_IDS), 20)]:
@@ -291,33 +273,30 @@ def main_loop():
                     for i in remote_items: found_items_map[i['id']] = i
                     area_items = fetch_hh_paginated(q, employer_ids=batch_ids, area=TARGET_AREAS)
                     for i in area_items: found_items_map[i['id']] = i
-                    total_white += process_items(list(found_items_map.values()), role, rules)
+                    cycle_found += process_items(list(found_items_map.values()), role, rules)
 
-        logging.info(f"WL: {total_white}. Global...")
-        
-        total_global = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
                 check_remote_stop()
                 items = fetch_hh_paginated(q, employer_ids=None, schedule="remote", period=7)
-                total_global += process_items(items, role, rules, is_global=True)
+                cycle_found += process_items(items, role, rules, is_global=True)
         
-        report = (
-            f"🏁 Цикл завершен\n"
-            f"🔹 Топ компании: +{total_white}\n"
-            f"🔹 Остальные: +{total_global}"
-        )
-        logging.info(f"ИТОГ: WL={total_white}, Other={total_global}")
+        daily_counter += cycle_found
+        logging.info(f"🏁 Цикл Analyst завершен. +{cycle_found} (Всего за день: {daily_counter})")
         
-        if (total_white + total_global) > 0:
-            send_telegram(report)
-
         seconds, next_run = get_smart_sleep_time()
-        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')} (Human interval)")
+        
+        # === ИТОГИ ДНЯ ===
+        now = datetime.now()
+        if now.hour >= 23 and daily_counter > 0:
+            send_telegram(f"🌙 <b>Итоги дня (Analyst):</b>\nНайдено вакансий: {daily_counter}")
+            daily_counter = 0
+
+        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')}")
         
         while seconds > 0:
             check_remote_stop()
-            sleep_chunk = min(seconds, 60)
+            sleep_chunk = min(seconds, 10) # 10 секунд для быстрой остановки
             time.sleep(sleep_chunk)
             seconds -= sleep_chunk
 
