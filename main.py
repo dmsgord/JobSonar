@@ -13,7 +13,7 @@ from db import init_db, is_sent, mark_as_sent, set_db_name
 try:
     from whitelist import APPROVED_COMPANIES
 except ImportError:
-    print("❌ ОШИБКА: Файл whitelist.py не найден! Проверьте кодировку UTF-8.")
+    print("❌ ОШИБКА: Файл whitelist.py не найден!")
     sys.exit(1)
 
 logging.basicConfig(
@@ -54,6 +54,15 @@ HR_HARD_SKILLS = [
     'сорсинг', 'sourcing', 'boolean', 'x-ray',
     'english', 'английский', 'upper-intermediate', 'advanced'
 ]
+
+# --- ФУНКЦИЯ СТАТУСА ---
+def set_status(text):
+    try:
+        with open("status_hr.txt", "w", encoding="utf-8") as f:
+            now = datetime.now().strftime("%H:%M")
+            f.write(f"[{now}] {text}")
+    except: pass
+# -----------------------
 
 def signal_handler(sig, frame):
     logging.info("🛑 Получен сигнал остановки.")
@@ -101,13 +110,10 @@ def check_remote_stop():
     except: pass
 
 def smart_contains(text, word):
-    """Унифицированный и оптимизированный поиск"""
     word_lower = word.lower()
     text_lower = text.lower()
-    # Если слово короткое (<=3) и английское/цифры - ищем только целое слово
     if len(word_lower) <= 3 and word_lower.isascii():
         return re.search(r'\b' + re.escape(word_lower) + r'\b', text_lower) is not None
-    # Иначе ищем вхождение
     return word_lower in text_lower
 
 def extract_skills(item, target_skills):
@@ -124,7 +130,6 @@ def extract_skills(item, target_skills):
 def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period=SEARCH_PERIOD):
     all_items = []
     page = 0
-    # Ограничиваем глубину 10 страницами для скорости
     params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period}
     if employer_ids: params["employer_id"] = employer_ids
     if area: params["area"] = area
@@ -273,17 +278,20 @@ def main_loop():
     init_db()
     init_updates()
     logging.info("🚀 HR Bot v5.1 (Optimized) Started")
-    send_telegram("🟢 <b>HR-мониторинг запущен (Server Ready)</b>")
+    send_telegram("🟢 <b>HR-мониторинг запущен</b>")
+    set_status("🚀 Запуск системы...")
     
     daily_counter = 0
 
     while True:
         check_remote_stop()
         logging.info("=== Старт проверки (HR) ===")
+        set_status("🚀 Начинаю новый цикл поиска...")
         
         cycle_found = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
+                set_status(f"🔎 Ищу: {q}")
                 for batch_ids in [ALL_IDS[i:i + 20] for i in range(0, len(ALL_IDS), 20)]:
                     check_remote_stop()
                     found_items_map = {} 
@@ -295,26 +303,25 @@ def main_loop():
 
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
+                set_status(f"🔎 Global поиск: {q}")
                 check_remote_stop()
                 items = fetch_hh_paginated(q, employer_ids=None, schedule="remote", period=7)
                 cycle_found += process_items(items, role, rules, is_global=True)
         
         daily_counter += cycle_found
-        logging.info(f"🏁 Цикл HR завершен. +{cycle_found} (Всего за день: {daily_counter})")
+        logging.info(f"🏁 Цикл HR завершен. +{cycle_found}")
         
         seconds, next_run = get_smart_sleep_time()
         
-        # === ИТОГИ ДНЯ (HR) ===
-        now = datetime.now()
         if now.hour >= 23 and daily_counter > 0:
-            send_telegram(f"🌙 <b>Итоги дня (HR):</b>\nНайдено вакансий: {daily_counter}")
+            send_telegram(f"🌙 <b>Итоги дня (HR):</b> {daily_counter} вак.")
             daily_counter = 0
 
-        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')}")
+        logging.info(f"💤 Спим до {next_run.strftime('%H:%M')}")
+        set_status(f"💤 Сплю до {next_run.strftime('%H:%M')}. За сегодня: {daily_counter}")
         
         while seconds > 0:
             check_remote_stop() 
-            # FIX: Быстрая проверка каждые 10 секунд
             sleep_chunk = min(seconds, 10) 
             time.sleep(sleep_chunk)
             seconds -= sleep_chunk

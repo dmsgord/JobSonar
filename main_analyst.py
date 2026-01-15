@@ -38,6 +38,15 @@ CAT_ALIASES = {
     'ОСТАЛЬНЫЕ': '🌐'
 }
 
+# --- ФУНКЦИЯ СТАТУСА ---
+def set_status(text):
+    try:
+        with open("status_analyst.txt", "w", encoding="utf-8") as f:
+            now = datetime.now().strftime("%H:%M")
+            f.write(f"[{now}] {text}")
+    except: pass
+# -----------------------
+
 def signal_handler(sig, frame):
     logging.info("🛑 Завершение работы...")
     send_telegram("🛑 <b>Analyst-мониторинг остановлен</b>")
@@ -255,17 +264,20 @@ def main_loop():
     init_db()
     init_updates()
     logging.info("🚀 Analyst Bot v5.1 (Optimized) Started")
-    send_telegram("🟢 <b>Analyst-мониторинг запущен (Server Ready)</b>")
+    send_telegram("🟢 <b>Analyst-мониторинг запущен</b>")
+    set_status("🚀 Запуск системы...")
     
     daily_counter = 0
 
     while True:
         check_remote_stop()
         logging.info("=== Старт проверки (Analyst) ===")
+        set_status("🚀 Начинаю новый цикл...")
         
         cycle_found = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
+                set_status(f"🔎 Ищу: {q}")
                 for batch_ids in [ALL_IDS[i:i + 20] for i in range(0, len(ALL_IDS), 20)]:
                     check_remote_stop()
                     found_items_map = {}
@@ -277,22 +289,22 @@ def main_loop():
 
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
+                set_status(f"🔎 Global поиск: {q}")
                 check_remote_stop()
                 items = fetch_hh_paginated(q, employer_ids=None, schedule="remote", period=7)
                 cycle_found += process_items(items, role, rules, is_global=True)
         
         daily_counter += cycle_found
-        logging.info(f"🏁 Цикл Analyst завершен. +{cycle_found} (Всего за день: {daily_counter})")
+        logging.info(f"🏁 Цикл Analyst завершен. +{cycle_found}")
         
         seconds, next_run = get_smart_sleep_time()
         
-        # === ИТОГИ ДНЯ ===
-        now = datetime.now()
         if now.hour >= 23 and daily_counter > 0:
-            send_telegram(f"🌙 <b>Итоги дня (Analyst):</b>\nНайдено вакансий: {daily_counter}")
+            send_telegram(f"🌙 <b>Итоги дня (Analyst):</b> {daily_counter} вак.")
             daily_counter = 0
 
-        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')}")
+        logging.info(f"💤 Спим до {next_run.strftime('%H:%M')}")
+        set_status(f"💤 Сплю до {next_run.strftime('%H:%M')}. За сегодня: {daily_counter}")
         
         while seconds > 0:
             check_remote_stop()

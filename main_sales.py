@@ -36,6 +36,15 @@ CAT_ALIASES = {
     'ОСТАЛЬНЫЕ': '🌐'
 }
 
+# --- ФУНКЦИЯ СТАТУСА ---
+def set_status(text):
+    try:
+        with open("status_sales.txt", "w", encoding="utf-8") as f:
+            now = datetime.now().strftime("%H:%M")
+            f.write(f"[{now}] {text}")
+    except: pass
+# -----------------------
+
 def signal_handler(sig, frame):
     logging.info("🛑 Получен сигнал остановки.")
     send_telegram("🛑 <b>Sales-мониторинг остановлен</b>")
@@ -88,32 +97,19 @@ def smart_contains(text, word):
     return word_lower in text_lower
 
 def is_individual_person(emp_name):
-    """
-    Детектор Физлиц v5.0 (Дефисы, Anti-Surname)
-    """
     name_lower = emp_name.lower().strip()
-    
-    # 1. Прямые маркеры
     if name_lower.startswith('ип ') or ' ип' in name_lower: return True
     if '.' in name_lower: return True 
-    
-    # FIX: Правильное разбиение по пробелам И дефисам
     parts = re.split(r'[\s-]+', name_lower)
-
-    # 2. ПРИОРИТЕТНАЯ проверка на Отчество
     for part in parts:
         if part.endswith('вич') or part.endswith('вна'): return True
         if part.endswith('оглы') or part.endswith('кызы'): return True
-
-    # 3. Проверка на Одинокую Фамилию
     if len(parts) == 1:
         surname_endings = ('ов', 'ова', 'ев', 'ева', 'ин', 'ина', 'ский', 'ская', 'ая', 'ый')
         if name_lower.endswith(surname_endings):
             safe_singles = ['снаб', 'торг', 'пром', 'строй', 'групп', 'group', 'софт', 'soft']
             if not any(s in name_lower for s in safe_singles):
                  return True
-
-    # 4. Белый список корпоративных маркеров
     corp_whitelist = [
         'ооо', 'ао', 'пао', 'зао', 'llc', 'ltd', 'inc', 'gmbh',
         'групп', 'group', 'холдинг', 'holding',
@@ -129,15 +125,11 @@ def is_individual_person(emp_name):
         'club', 'клуб', 'platform', 'платформ', 'pro', 'про',
         'онлайн', 'online', 'business', 'бизнес'
     ]
-    
     if any(marker in name_lower for marker in corp_whitelist):
         return False
-            
-    # 5. Если маркеров нет, а слов 2-4 -> Считаем человеком
     if 2 <= len(parts) <= 4:
         if bool(re.search('[а-я]', name_lower)):
             return True
-            
     return False
 
 def check_domain_relevance(item, markers, stop_domains):
@@ -188,7 +180,6 @@ def process_items(items, role, rules, is_global=False):
     processed_count = 0
     unique_items = {v['id']: v for v in items}.values()
     
-    # FIX: Кеш теперь локальный для каждого цикла (чтобы не текла память)
     spam_deduplication_cache = set()
 
     for item in unique_items:
@@ -203,7 +194,6 @@ def process_items(items, role, rules, is_global=False):
         emp_name = emp.get('name', '')
         emp_id = str(emp.get('id', ''))
         
-        # Anti-Spam
         spam_signature = f"{emp_id}_{title_lower}"
         if spam_signature in spam_deduplication_cache:
             mark_as_sent(vac_id)
@@ -212,7 +202,6 @@ def process_items(items, role, rules, is_global=False):
         else:
             spam_deduplication_cache.add(spam_signature)
 
-        # 1. Фильтр ИПшников
         if is_individual_person(emp_name):
             continue
 
@@ -232,11 +221,9 @@ def process_items(items, role, rules, is_global=False):
         has_office_marker = any(x in details_text for x in stop_location_markers)
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
 
-        # 2. Только чистая удаленка
         if not (is_remote_explicit and not has_office_marker):
             continue
             
-        # 3. Только Digital сферы
         if not check_domain_relevance(item, rules['digital_markers'], rules['stop_domains']):
             continue
 
@@ -247,7 +234,6 @@ def process_items(items, role, rules, is_global=False):
         salary_value = 0
         
         if sal and sal['from']:
-            # Валютный фильтр (Жесткий)
             if sal['currency'] not in ['RUR', 'USD', 'EUR']:
                 continue
 
@@ -321,39 +307,40 @@ def main_loop():
     init_db()
     init_updates()
     logging.info("🚀 Sales Bot v5.1 (Optimized) Started")
-    send_telegram("🟢 <b>Sales-мониторинг запущен (Server Ready)</b>")
+    send_telegram("🟢 <b>Sales-мониторинг запущен</b>")
+    set_status("🚀 Запуск системы...")
     
     daily_counter = 0
     
     while True:
         check_remote_stop()
         logging.info("=== Старт проверки (Sales) ===")
+        set_status("🚀 Начинаю новый цикл...")
         
         cycle_found = 0
         for role, rules in PROFILES.items():
             for q in rules["keywords"]:
+                set_status(f"🔎 Ищу: {q}")
                 check_remote_stop()
                 items = fetch_hh_paginated(q, schedule="remote", period=7)
                 if items:
-                    logging.info(f"🔎 Checking '{q}' (Found {len(items)} raw items)")
+                    logging.info(f"🔎 Checking '{q}'")
                     cycle_found += process_items(items, role, rules, is_global=True)
         
         daily_counter += cycle_found
-        logging.info(f"🏁 Цикл Sales завершен. +{cycle_found} (Всего за день: {daily_counter})")
+        logging.info(f"🏁 Цикл Sales завершен. +{cycle_found}")
         
         seconds, next_run = get_smart_sleep_time()
         
-        # === ИТОГИ ДНЯ ===
-        now = datetime.now()
         if now.hour >= 23 and daily_counter > 0:
-            send_telegram(f"🌙 <b>Итоги дня (Sales):</b>\nНайдено вакансий: {daily_counter}")
+            send_telegram(f"🌙 <b>Итоги дня (Sales):</b> {daily_counter}")
             daily_counter = 0
         
-        logging.info(f"💤 Спим {int(seconds)} сек. до {next_run.strftime('%H:%M %d.%m')}")
+        logging.info(f"💤 Спим до {next_run.strftime('%H:%M %d.%m')}")
+        set_status(f"💤 Сплю до {next_run.strftime('%H:%M')}. За сегодня: {daily_counter}")
         
         while seconds > 0:
             check_remote_stop()
-            # FIX: Быстрая проверка каждые 10 секунд
             sleep_chunk = min(seconds, 10)
             time.sleep(sleep_chunk)
             seconds -= sleep_chunk
