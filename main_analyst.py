@@ -38,11 +38,11 @@ CAT_ALIASES = {
     'ОСТАЛЬНЫЕ': '🌐'
 }
 
-# --- ФУНКЦИЯ СТАТУСА ---
+# --- ФУНКЦИЯ СТАТУСА (MSK TIME) ---
 def set_status(text):
     try:
         with open("status_analyst.txt", "w", encoding="utf-8") as f:
-            now = datetime.now().strftime("%H:%M")
+            now = (datetime.utcnow() + timedelta(hours=3)).strftime("%H:%M")
             f.write(f"[{now}] {text}")
     except: pass
 # -----------------------
@@ -234,7 +234,9 @@ def process_items(items, role, rules, is_global=False):
     return processed_count
 
 def get_smart_sleep_time():
-    now = datetime.now()
+    # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ (MSK) ---
+    now = datetime.utcnow() + timedelta(hours=3)
+    # ---------------------------------
     if now.weekday() >= 5: 
         if now.hour < 11:
              target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
@@ -263,8 +265,8 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Analyst Bot v5.1 (Optimized) Started")
-    send_telegram("🟢 <b>Analyst-мониторинг запущен</b>")
+    logging.info("🚀 Analyst Bot v5.2 (MSK Time) Started")
+    send_telegram("🟢 <b>Analyst-мониторинг запущен (MSK)</b>")
     set_status("🚀 Запуск системы...")
     
     daily_counter = 0
@@ -299,8 +301,9 @@ def main_loop():
         
         seconds, next_run = get_smart_sleep_time()
         
-        # --- FIXED: Added variable definition ---
-        now = datetime.now()
+        # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ (MSK) ---
+        now = datetime.utcnow() + timedelta(hours=3)
+        # ---------------------------------
         
         if now.hour >= 23 and daily_counter > 0:
             send_telegram(f"🌙 <b>Итоги дня (Analyst):</b> {daily_counter} вак.")
