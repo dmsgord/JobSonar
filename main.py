@@ -40,7 +40,7 @@ ALL_IDS = list(APPROVED_COMPANIES.keys())
 session = requests.Session()
 session.headers.update({'User-Agent': USER_AGENT})
 
-set_db_name(os.path.join(BASE_DIR, DB_NAME)) # База данных тоже по абсолютному пути
+set_db_name(os.path.join(BASE_DIR, DB_NAME)) # База данных по абсолютному пути
 BOT_ID = TG_TOKEN.split(':')[0] if TG_TOKEN else "0"
 LAST_UPDATE_ID = 0
 
@@ -163,12 +163,29 @@ def process_items(items, role, rules, is_global=False):
     processed_count = 0
     unique_items = {v['id']: v for v in items}.values()
 
+    # 🔥 ДАТА ОТСЕЧЕНИЯ (СЕГОДНЯ)
+    # Вакансии старше этой даты будут записаны в базу, но НЕ отправлены
+    cutoff_date = "2026-01-16" 
+
     for item in unique_items:
         vac_id = item['id']
         title = item['name']
         title_lower = title.lower()
+        pub_date_raw = item.get('published_at', '').split('T')[0]
 
         if is_sent(vac_id): continue
+
+        # --- ТИХИЙ РЕЖИМ ДЛЯ СТАРЫХ ВАКАНСИЙ ---
+        if pub_date_raw < cutoff_date:
+            emp = item.get('employer', {})
+            emp_id = str(emp.get('id', ''))
+            cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
+            cat_emoji = get_clean_category(cat_raw)
+            # Молча пишем в базу
+            mark_as_sent(vac_id, category=cat_emoji)
+            continue # Пропускаем отправку
+        # ---------------------------------------
+
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
         if any(stop_w in title_lower for stop_w in FACTORY_STOP_WORDS): continue
 

@@ -195,13 +195,27 @@ def process_items(items, role, rules, is_global=False):
     
     spam_deduplication_cache = set()
 
+    # 🔥 ДАТА ОТСЕЧЕНИЯ
+    cutoff_date = "2026-01-16"
+
     for item in unique_items:
         vac_id = item['id']
         title = item['name']
         title_lower = title.lower()
+        pub_date_raw = item.get('published_at', '').split('T')[0]
 
         if is_sent(vac_id): continue
         if any(stop_w in title_lower for stop_w in rules["stop_words_title"]): continue
+
+        # --- ТИХИЙ РЕЖИМ ---
+        if pub_date_raw < cutoff_date:
+            emp = item.get('employer', {})
+            emp_id = str(emp.get('id', ''))
+            cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
+            cat_emoji = get_clean_category(cat_raw)
+            mark_as_sent(vac_id, category=cat_emoji)
+            continue 
+        # -------------------
 
         emp = item.get('employer', {})
         emp_name = emp.get('name', '')

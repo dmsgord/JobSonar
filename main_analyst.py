@@ -151,12 +151,27 @@ def process_items(items, role, rules, is_global=False):
     processed_count = 0
     unique_items = {v['id']: v for v in items}.values()
 
+    # 🔥 ДАТА ОТСЕЧЕНИЯ
+    cutoff_date = "2026-01-16"
+
     for item in unique_items:
         vac_id = item['id']
         title = item['name']
         title_lower = title.lower()
+        pub_date_raw = item.get('published_at', '').split('T')[0]
 
         if is_sent(vac_id): continue
+
+        # --- ТИХИЙ РЕЖИМ ---
+        if pub_date_raw < cutoff_date:
+            emp = item.get('employer', {})
+            emp_id = str(emp.get('id', ''))
+            cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
+            cat_emoji = get_clean_category(cat_raw)
+            mark_as_sent(vac_id, category=cat_emoji)
+            continue 
+        # -------------------
+
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
 
         dev_stop_words = ['разработки', 'development', 'developer', 'разработчик', 'programmer', 'golang', 'java', 'backend', 'frontend']
