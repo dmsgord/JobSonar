@@ -26,19 +26,17 @@ bot = telebot.TeleBot(MONITOR_TOKEN)
 
 # --- НАСТРОЙКИ ---
 BOTS = {
-    "main.py":         ("HR Bot",      "status_hr.txt",      "log_hr.txt"),
-    "main_analyst.py": ("Analyst Bot", "status_analyst.txt", "log_analyst.txt"),
-    "main_sales.py":   ("Sales Bot",   "status_sales.txt",   "log_sales.txt")
+    "main.py":           ("HR Bot",        "status_hr.txt",        "log_hr.txt"),
+    "main_analyst.py":   ("Analyst Bot",   "status_analyst.txt",   "log_analyst.txt"),
+    "main_sales.py":     ("Sales Bot",     "status_sales.txt",     "log_sales.txt"),
+    "main_recruiter.py": ("Recruiter Bot", "status_recruiter.txt", "log_recruiter.txt")
 }
 
 # --- ЛОГИКА ---
 def check_process(script_name):
     """Проверяет, запущен ли процесс с указанным именем скрипта"""
     try:
-        # Получаем список всех процессов
         output = subprocess.check_output(["ps", "-ax"]).decode()
-        # Ищем имя файла (например, main.py) в строке процесса.
-        # Это сработает, даже если запуск был через 'python3 -u main.py'
         return script_name in output
     except:
         return False
@@ -58,29 +56,24 @@ def get_last_error_log(logfile):
     try:
         with open(logfile, "r", encoding="utf-8", errors='ignore') as f:
             lines = f.readlines()
-            # Берем последние 8 строк
             last_lines = lines[-8:] if len(lines) > 8 else lines
             return "".join(last_lines).strip()
     except Exception as e:
         return f"Ошибка: {e}"
 
 def cleanup_logs():
-    """Проверяет размер логов и обрезает их, если они слишком большие"""
     for script, (name, status_file, log_file) in BOTS.items():
         if os.path.exists(log_file):
             try:
                 size = os.path.getsize(log_file)
                 if size > MAX_LOG_SIZE_BYTES:
-                    # Читаем последние 200 строк
                     with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
                         lines = f.readlines()
                         last_lines = lines[-200:]
-                    
-                    # Перезаписываем файл, оставляя только хвост
                     with open(log_file, "w", encoding="utf-8") as f:
                         f.write(f"--- LOG CLEANED BY MONITOR (Was > 5MB) ---\n")
                         f.writelines(last_lines)
-                    print(f"🧹 Лог {log_file} был очищен (превысил лимит).")
+                    print(f"🧹 Лог {log_file} был очищен.")
             except Exception as e:
                 print(f"Ошибка очистки лога {log_file}: {e}")
 
@@ -114,7 +107,6 @@ def get_keyboard():
 @bot.message_handler(commands=['start', 'status'])
 def send_status(message):
     try:
-        print(f"📩 Получена команда /start от {message.from_user.id}")
         bot.send_message(message.chat.id, generate_report(), reply_markup=get_keyboard(), parse_mode="HTML")
     except Exception as e:
         print(f"❌ Ошибка отправки: {e}")
@@ -129,13 +121,8 @@ def refresh_callback(call):
 
 def background_checker():
     while True:
-        # Раз в 30 минут проверяем состояние И чистим логи
         time.sleep(1800)
-        
-        # 1. Чистка
         cleanup_logs()
-        
-        # 2. Проверка падений
         try:
             text = generate_report()
             if "❌" in text and ADMIN_CHAT_ID:
@@ -144,6 +131,5 @@ def background_checker():
 
 if __name__ == "__main__":
     threading.Thread(target=background_checker, daemon=True).start()
-    print("🤖 Monitor Bot (с авто-очисткой логов) запускается...")
-    # infinity_polling защищает от разрывов соединения
+    print("🤖 Monitor Bot запускается...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
