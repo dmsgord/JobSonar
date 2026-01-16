@@ -53,7 +53,8 @@ def set_status(text):
         with open(STATUS_FILE, "w", encoding="utf-8") as f:
             now = (datetime.utcnow() + timedelta(hours=3)).strftime("%H:%M")
             f.write(f"[{now}] {text}")
-    except: pass
+    except Exception as e:
+        logging.error(f"Error writing status: {e}")
 
 def signal_handler(sig, frame):
     logging.info("🛑 Получен сигнал остановки.")
@@ -78,7 +79,8 @@ def init_updates():
         resp = requests.get(url, params={"limit": 1, "offset": -1}, timeout=5).json()
         if resp.get("result"):
             LAST_UPDATE_ID = resp["result"][0]["update_id"]
-    except: pass
+    except Exception as e:
+        logging.warning(f"Init updates error: {e}")
 
 def check_remote_stop():
     global LAST_UPDATE_ID
@@ -97,7 +99,8 @@ def check_remote_stop():
                     if "стоп" in text:
                         send_telegram("🛑 <b>Sales-бот остановлен</b>")
                         sys.exit(0)
-    except: pass
+    except Exception as e:
+        logging.warning(f"Remote stop check error: {e}")
 
 def smart_contains(text, word):
     word_lower = word.lower()
@@ -195,27 +198,14 @@ def process_items(items, role, rules, is_global=False):
     
     spam_deduplication_cache = set()
 
-    # 🔥 ДАТА ОТСЕЧЕНИЯ
-    cutoff_date = "2026-01-16"
-
     for item in unique_items:
         vac_id = item['id']
         title = item['name']
         title_lower = title.lower()
-        pub_date_raw = item.get('published_at', '').split('T')[0]
-
+        
+        # Проверка на отправку
         if is_sent(vac_id): continue
         if any(stop_w in title_lower for stop_w in rules["stop_words_title"]): continue
-
-        # --- ТИХИЙ РЕЖИМ ---
-        if pub_date_raw < cutoff_date:
-            emp = item.get('employer', {})
-            emp_id = str(emp.get('id', ''))
-            cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
-            cat_emoji = get_clean_category(cat_raw)
-            mark_as_sent(vac_id, category=cat_emoji)
-            continue 
-        # -------------------
 
         emp = item.get('employer', {})
         emp_name = emp.get('name', '')
@@ -260,18 +250,19 @@ def process_items(items, role, rules, is_global=False):
         threshold = MIN_SALARY
         salary_value = 0
         
-        if sal and sal['from']:
-            if sal['currency'] not in ['RUR', 'USD', 'EUR']:
+        # --- FIX: Безопасное получение зарплаты ---
+        if sal and sal.get('from'):
+            if sal.get('currency') not in ['RUR', 'USD', 'EUR']:
                 continue
 
-            if sal['currency'] == 'RUR':
-                 if sal['from'] < threshold:
+            if sal.get('currency') == 'RUR':
+                 if sal.get('from') < threshold:
                      continue 
-                 salary_text = f"от {sal['from']} {sal.get('currency','₽')}"
+                 salary_text = f"от {sal.get('from')} {sal.get('currency','₽')}"
                  is_bold_salary = True
-                 salary_value = sal['from']
+                 salary_value = sal.get('from')
             else:
-                 salary_text = f"от {sal['from']} {sal.get('currency')}"
+                 salary_text = f"от {sal.get('from')} {sal.get('currency')}"
                  is_bold_salary = True
                  salary_value = 999999 
         
@@ -305,7 +296,6 @@ def process_items(items, role, rules, is_global=False):
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
-    
     if now.weekday() >= 5: 
         if now.hour < 11:
              target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
@@ -327,16 +317,14 @@ def get_smart_sleep_time():
         else:
              minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
-
-    if target <= now:
-        target = now + timedelta(minutes=5)
+    if target <= now: target = now + timedelta(minutes=5)
     return max(10, (target - now).total_seconds()), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Sales Bot v5.3 (Production Ready) Started")
-    send_telegram("🟢 <b>Sales-мониторинг запущен (MSK)</b>")
+    logging.info("🚀 Sales Bot v5.6 (Stable & Safe) Started")
+    send_telegram("🟢 <b>Sales-мониторинг запущен (Stable)</b>")
     set_status("🚀 Запуск системы...")
     
     while True:
@@ -363,8 +351,8 @@ def main_loop():
             if now.hour >= 23:
                 msg = (
                     f"🌙 <b>Итоги дня (Sales):</b>\n"
-                    f"🔹 Топ компании: +{stats['Топ компании']}\n"
-                    f"🔹 Остальные: +{stats['Остальные']}"
+                    f"🔹 Топ компании: +{stats.get('Топ компании', 0)}\n"
+                    f"🔹 Остальные: +{stats.get('Остальные', 0)}"
                 )
                 send_telegram(msg)
             
@@ -379,7 +367,7 @@ def main_loop():
         
         except Exception as e:
             logging.error(f"CRITICAL ERROR in main loop: {e}")
-            send_telegram(f"⚠️ <b>Ошибка в Sales боте:</b> {e}. Перезапуск через 1 мин.")
+            send_telegram(f"⚠️ Ошибка Sales: {e}")
             time.sleep(60)
 
 if __name__ == "__main__":

@@ -10,15 +10,15 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения явно
+# Загружаем переменные окружения
 load_dotenv()
 
-# Опеределяем рабочую директорию (где лежит скрипт)
+# Опеределяем рабочую директорию
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(BASE_DIR, "log_hr.txt")
 STATUS_FILE = os.path.join(BASE_DIR, "status_hr.txt")
 
-# Настройка логирования (в файл + в консоль)
+# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -40,7 +40,7 @@ ALL_IDS = list(APPROVED_COMPANIES.keys())
 session = requests.Session()
 session.headers.update({'User-Agent': USER_AGENT})
 
-set_db_name(os.path.join(BASE_DIR, DB_NAME)) # База данных по абсолютному пути
+set_db_name(os.path.join(BASE_DIR, DB_NAME))
 BOT_ID = TG_TOKEN.split(':')[0] if TG_TOKEN else "0"
 LAST_UPDATE_ID = 0
 
@@ -69,7 +69,7 @@ def set_status(text):
             now = (datetime.utcnow() + timedelta(hours=3)).strftime("%H:%M")
             f.write(f"[{now}] {text}")
     except Exception as e:
-        logging.error(f"Ошибка записи статуса: {e}")
+        logging.error(f"Error writing status: {e}")
 
 def signal_handler(sig, frame):
     logging.info("🛑 Получен сигнал остановки.")
@@ -94,7 +94,8 @@ def init_updates():
         resp = requests.get(url, params={"limit": 1, "offset": -1}, timeout=5).json()
         if resp.get("result"):
             LAST_UPDATE_ID = resp["result"][0]["update_id"]
-    except: pass
+    except Exception as e:
+        logging.warning(f"Init updates warning: {e}")
 
 def check_remote_stop():
     global LAST_UPDATE_ID
@@ -114,7 +115,8 @@ def check_remote_stop():
                     if "стоп" in text or "stop" in text:
                         send_telegram("🛑 <b>HR-мониторинг остановлен командой</b>")
                         sys.exit(0)
-    except: pass
+    except Exception as e:
+        logging.warning(f"Remote stop check warning: {e}")
 
 def smart_contains(text, word):
     word_lower = word.lower()
@@ -131,15 +133,21 @@ def extract_skills(item, target_skills):
             found.add(skill.title())
     return list(found)
 
-def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period=SEARCH_PERIOD):
+def get_clean_category(cat_raw):
+    clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
+    return CAT_ALIASES.get(clean, '🌐')
+
+# --- BATCH FETCHING ---
+def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
     all_items = []
     page = 0
-    params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period}
+    params = {"order_by": "publication_time", "per_page": 100, "period": period}
+    
     if employer_ids: params["employer_id"] = employer_ids
     if area: params["area"] = area
     if schedule: params["schedule"] = schedule
 
-    while page < 10:
+    while page < 10: 
         params["page"] = page
         try:
             resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
@@ -149,45 +157,36 @@ def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period
             all_items.extend(items)
             if page >= data.get('pages', 0) - 1: break
             page += 1
-            time.sleep(random.uniform(0.3, 1.0))
+            time.sleep(0.2)
         except Exception as e:
-            logging.error(f"Ошибка API HH: {e}")
+            logging.error(f"HH API Error: {e}")
             break
     return all_items
 
-def get_clean_category(cat_raw):
-    clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
-    return CAT_ALIASES.get(clean, '🌐')
-
-def process_items(items, role, rules, is_global=False):
-    processed_count = 0
+# --- FILTERING ---
+def filter_and_process(items, rules, is_global=False):
     unique_items = {v['id']: v for v in items}.values()
-
-    # 🔥 ДАТА ОТСЕЧЕНИЯ (СЕГОДНЯ)
-    # Вакансии старше этой даты будут записаны в базу, но НЕ отправлены
-    cutoff_date = "2026-01-16" 
 
     for item in unique_items:
         vac_id = item['id']
         title = item['name']
         title_lower = title.lower()
-        pub_date_raw = item.get('published_at', '').split('T')[0]
-
+        
+        # Если уже отправляли - пропускаем
         if is_sent(vac_id): continue
-
-        # --- ТИХИЙ РЕЖИМ ДЛЯ СТАРЫХ ВАКАНСИЙ ---
-        if pub_date_raw < cutoff_date:
-            emp = item.get('employer', {})
-            emp_id = str(emp.get('id', ''))
-            cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
-            cat_emoji = get_clean_category(cat_raw)
-            # Молча пишем в базу
-            mark_as_sent(vac_id, category=cat_emoji)
-            continue # Пропускаем отправку
-        # ---------------------------------------
 
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
         if any(stop_w in title_lower for stop_w in FACTORY_STOP_WORDS): continue
+
+        # Проверка HR-роли
+        extended_hr_keywords = rules["must_have_hr"] + ['talent', 'people', 'acquisition', 'human']
+        extended_role_keywords = rules["must_have_role"] + ['partner', 'lead', 'head']
+
+        has_hr = any(smart_contains(title, w) for w in extended_hr_keywords)
+        has_role = any(smart_contains(title, w) for w in extended_role_keywords)
+        is_direct = any(smart_contains(title, x) for x in ['hrd', 'hrbp', 'hr director', 'hr-директор'])
+        
+        if not (is_direct or (has_hr and has_role)): continue
 
         exp = item.get('experience', {})
         if exp.get('id') == 'noExperience': continue
@@ -208,15 +207,6 @@ def process_items(items, role, rules, is_global=False):
         is_clean_remote = is_remote_explicit and not has_office_marker
 
         if is_global and has_office_marker: continue
-        
-        extended_hr_keywords = rules["must_have_hr"] + ['talent', 'people', 'acquisition', 'human']
-        extended_role_keywords = rules["must_have_role"] + ['partner', 'lead', 'head']
-
-        has_hr = any(smart_contains(title, w) for w in extended_hr_keywords)
-        has_role = any(smart_contains(title, w) for w in extended_role_keywords)
-        is_direct = any(smart_contains(title, x) for x in ['hrd', 'hrbp', 'hr director', 'hr-директор'])
-        
-        if not (is_direct or (has_hr and has_role)): continue
 
         found_skills = extract_skills(item, HR_HARD_SKILLS)
         skills_str = ", ".join(sorted(found_skills))
@@ -227,12 +217,13 @@ def process_items(items, role, rules, is_global=False):
         threshold = 250000 if is_global else MIN_SALARY
         salary_value = 0
 
-        if sal and sal['from']:
-            if sal['currency'] != 'RUR': continue
-            if sal['from'] < threshold: continue
-            salary_text = f"от {sal['from']} {sal.get('currency','₽')}"
+        # --- FIX: Безопасное получение зарплаты ---
+        if sal and sal.get('from'):
+            if sal.get('currency') != 'RUR': continue
+            if sal.get('from') < threshold: continue
+            salary_text = f"от {sal.get('from')} {sal.get('currency','₽')}"
             is_bold_salary = True
-            salary_value = sal['from']
+            salary_value = sal.get('from')
         elif is_global:
             continue
 
@@ -268,13 +259,28 @@ def process_items(items, role, rules, is_global=False):
         send_telegram(msg)
         mark_as_sent(vac_id, category=cat_emoji)
         logging.info(f"✅ Отправлено: {title} [ID: {vac_id}]")
-        processed_count += 1
         time.sleep(0.5)
-    return processed_count
+
+def fetch_hh_paginated_global(text, period=7):
+    all_items = []
+    page = 0
+    params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period, "schedule": "remote"}
+    while page < 10:
+        params["page"] = page
+        try:
+            resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
+            data = resp.json()
+            items = data.get("items", [])
+            if not items: break
+            all_items.extend(items)
+            if page >= data.get('pages', 0) - 1: break
+            page += 1
+            time.sleep(random.uniform(0.3, 1.0))
+        except: break
+    return all_items
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
-    
     if now.weekday() >= 5: 
         if now.hour < 11:
              target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
@@ -296,57 +302,64 @@ def get_smart_sleep_time():
         else:
              minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
-
-    if target <= now:
-        target = now + timedelta(minutes=5)
-        
+    if target <= now: target = now + timedelta(minutes=5)
     return max(10, (target - now).total_seconds()), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v5.3 (Production Ready) Started")
-    send_telegram("🟢 <b>HR-мониторинг запущен (MSK)</b>")
+    logging.info("🚀 HR Bot v5.6 (Stable & Safe) Started")
+    send_telegram("🟢 <b>HR-мониторинг запущен (Stable)</b>")
     set_status("🚀 Запуск системы...")
     
     while True:
         try:
             check_remote_stop()
             logging.info("=== Старт проверки (HR) ===")
-            set_status("🚀 Начинаю новый цикл поиска...")
+            set_status("🚀 Начинаю поиск по компаниям...")
             
-            for role, rules in PROFILES.items():
-                for q in rules["keywords"]:
-                    set_status(f"🔎 Ищу: {q}")
-                    extended_queries = [q, "HR Lead", "People Partner", "Head of Talent"]
-                    for query in list(set(extended_queries)):
-                        for batch_ids in [ALL_IDS[i:i + 20] for i in range(0, len(ALL_IDS), 20)]:
-                            check_remote_stop()
-                            found_items_map = {} 
-                            remote_items = fetch_hh_paginated(query, employer_ids=batch_ids, schedule="remote")
-                            for i in remote_items: found_items_map[i['id']] = i
-                            area_items = fetch_hh_paginated(query, employer_ids=batch_ids, area=TARGET_AREAS)
-                            for i in area_items: found_items_map[i['id']] = i
-                            process_items(list(found_items_map.values()), role, rules)
+            # --- SMART BATCHING ---
+            batch_size = 20
+            all_ids_list = ALL_IDS
+            batches = [all_ids_list[i:i + batch_size] for i in range(0, len(all_ids_list), batch_size)]
+            
+            for i, batch_ids in enumerate(batches):
+                check_remote_stop()
+                found_items_map = {}
+                
+                # ДЛЯ ГИГАНТОВ (первые 10 пачек / 200 компаний) ищем только за 1 день
+                smart_period = 1 if i < 10 else 5
+                
+                remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=smart_period)
+                for item in remote_items: found_items_map[item['id']] = item
+                
+                area_items = fetch_company_vacancies(batch_ids, area=TARGET_AREAS, period=smart_period)
+                for item in area_items: found_items_map[item['id']] = item
+                
+                rules = PROFILES['HR']
+                filter_and_process(list(found_items_map.values()), rules)
+                time.sleep(1)
 
+            # --- GLOBAL SEARCH ---
+            set_status("🔎 Global поиск...")
             for role, rules in PROFILES.items():
                 for q in rules["keywords"]:
-                    set_status(f"🔎 Global поиск: {q}")
                     check_remote_stop()
-                    items = fetch_hh_paginated(q, employer_ids=None, schedule="remote", period=7)
-                    process_items(items, role, rules, is_global=True)
+                    items = fetch_hh_paginated_global(q, period=1) # Только свежее
+                    filter_and_process(items, rules, is_global=True)
             
             now = datetime.utcnow() + timedelta(hours=3)
             seconds, next_run = get_smart_sleep_time()
             
+            # Получаем статистику (теперь она вернет правильные ключи)
             stats = get_daily_stats()
             total_today = sum(stats.values())
             
             if now.hour >= 23:
                  msg = (
                     f"🌙 <b>Итоги дня (HR):</b>\n"
-                    f"🔹 Топ компании: +{stats['Топ компании']}\n"
-                    f"🔹 Остальные: +{stats['Остальные']}"
+                    f"🔹 Топ компании: +{stats.get('Топ компании', 0)}\n"
+                    f"🔹 Остальные: +{stats.get('Остальные', 0)}"
                 )
                  send_telegram(msg)
 
@@ -361,7 +374,7 @@ def main_loop():
         
         except Exception as e:
             logging.error(f"CRITICAL ERROR in main loop: {e}")
-            send_telegram(f"⚠️ <b>Ошибка в HR боте:</b> {e}. Перезапуск через 1 мин.")
+            send_telegram(f"⚠️ Ошибка HR: {e}")
             time.sleep(60)
 
 if __name__ == "__main__":

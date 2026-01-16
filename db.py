@@ -18,6 +18,7 @@ def init_db():
             created_at DATE DEFAULT CURRENT_DATE
         )
     ''')
+    # Миграции на случай старых версий базы
     try: cursor.execute("ALTER TABLE vacancies ADD COLUMN category TEXT DEFAULT 'Остальные'")
     except: pass
     try: cursor.execute("ALTER TABLE vacancies ADD COLUMN created_at DATE DEFAULT CURRENT_DATE")
@@ -37,6 +38,7 @@ def mark_as_sent(vac_id, category="Остальные"):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
+        # Используем localtime, чтобы статистика билась с часовым поясом сервера/МСК
         cursor.execute(
             "INSERT OR IGNORE INTO vacancies (id, category, created_at) VALUES (?, ?, date('now', 'localtime'))", 
             (vac_id, category)
@@ -47,8 +49,14 @@ def mark_as_sent(vac_id, category="Остальные"):
     conn.close()
 
 def get_daily_stats():
+    """
+    Возвращает статистику за текущие сутки, 
+    автоматически группируя эмодзи-категории в понятные группы.
+    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    
+    # Считаем сырые данные по категориям (там лежат эмодзи 🏆, 🥇 и т.д.)
     cursor.execute("""
         SELECT category, COUNT(*) 
         FROM vacancies 
@@ -57,9 +65,21 @@ def get_daily_stats():
     """)
     rows = cursor.fetchall()
     conn.close()
+
+    # Агрегация: Превращаем эмодзи в читаемые ключи для отчета
+    stats = {
+        'Топ компании': 0, 
+        'Остальные': 0
+    }
     
-    stats = {"Топ компании": 0, "Остальные": 0}
-    for cat, count in rows:
-        clean_cat = "Топ компании" if cat in ['🏆', '🥇', '🥈', '🥉'] else "Остальные"
-        stats[clean_cat] += count
+    # Эмодзи, которые считаем "Топом"
+    top_markers = ['🏆', '🥇', '🥈', '🥉', 'ГИГАНТЫ', 'КРУПНЫЕ', 'СРЕДНИЕ', 'НЕБОЛЬШИЕ']
+
+    for cat_raw, count in rows:
+        # Если категория содержит один из маркеров топа
+        if any(marker in cat_raw for marker in top_markers):
+            stats['Топ компании'] += count
+        else:
+            stats['Остальные'] += count
+            
     return stats
