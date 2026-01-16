@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import time
 import requests
 import re
@@ -5,28 +6,41 @@ import sys
 import signal
 import logging
 import random
+import os
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения явно
+load_dotenv()
+
+# Опеределяем рабочую директорию (где лежит скрипт)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(BASE_DIR, "log_hr.txt")
+STATUS_FILE = os.path.join(BASE_DIR, "status_hr.txt")
+
+# Настройка логирования (в файл + в консоль)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, SEARCH_PERIOD, USER_AGENT, DB_NAME
-from db import init_db, is_sent, mark_as_sent, set_db_name
+from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 
 try:
     from whitelist import APPROVED_COMPANIES
 except ImportError:
-    print("❌ ОШИБКА: Файл whitelist.py не найден!")
-    sys.exit(1)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+    APPROVED_COMPANIES = {}
 
 ALL_IDS = list(APPROVED_COMPANIES.keys())
 session = requests.Session()
 session.headers.update({'User-Agent': USER_AGENT})
 
-set_db_name(DB_NAME)
+set_db_name(os.path.join(BASE_DIR, DB_NAME)) # База данных тоже по абсолютному пути
 BOT_ID = TG_TOKEN.split(':')[0] if TG_TOKEN else "0"
 LAST_UPDATE_ID = 0
 
@@ -39,31 +53,23 @@ CAT_ALIASES = {
 }
 
 HR_HARD_SKILLS = [
-    '1с', '1c', 'зуп', 'zup', 'sap', 'bitrix', 'битрикс', 'amo', 'amocrm',
-    'excel', 'эксель', 'vlookup', 'впр', 'сводные таблицы',
-    'jira', 'confluence', 'slack', 'miro', 'notion',
-    'e-staff', 'estaff', 'potok', 'поток', 'huntflow', 'хантфлоу',
-    'sfl', 'сберподбор', 'hurma', 'bamboo', 'greenhouse',
-    'hh.ru', 'linkedin', 'линкедин', 'avito', 'авито',
-    'тк рф', 'трудовое право', 'кдп', 'кадровое делопроизводство',
-    'воинский учет', 'охрана труда', 'соут', 'консультант', 'гарант',
-    'kpi', 'okr', 'ipr', 'ипр', 'grades', 'грейды',
-    'фот', 'бюджетирование', 'budgeting', 'c&b',
-    'exit interview', 'onboarding', 'adaptation', 'адаптация',
-    'performance review', 'оценка персонала', '360',
-    'сорсинг', 'sourcing', 'boolean', 'x-ray',
-    'english', 'английский', 'upper-intermediate', 'advanced'
+    '1с', '1c', 'зуп', 'zup', 'sap', 'bitrix', 'битрикс', 'kpi', 'okr', 'c&b', 
+    'budgeting', 'бюджетирование', 'english', 'английский', 'potok', 'huntflow'
 ]
 
-# --- ФУНКЦИЯ СТАТУСА (MSK TIME) ---
+FACTORY_STOP_WORDS = [
+    'производств', 'цех', 'завод', 'мастер', 'участок', 'линия', 'смен', 
+    'двигател', 'машиностроен', 'металлург', 'конструктор', 'технолог', 
+    'промышлен', 'оборудован', 'апк', 'агро'
+]
+
 def set_status(text):
     try:
-        with open("status_hr.txt", "w", encoding="utf-8") as f:
-            # Берем UTC и добавляем 3 часа
+        with open(STATUS_FILE, "w", encoding="utf-8") as f:
             now = (datetime.utcnow() + timedelta(hours=3)).strftime("%H:%M")
             f.write(f"[{now}] {text}")
-    except: pass
-# -----------------------
+    except Exception as e:
+        logging.error(f"Ошибка записи статуса: {e}")
 
 def signal_handler(sig, frame):
     logging.info("🛑 Получен сигнал остановки.")
@@ -122,10 +128,7 @@ def extract_skills(item, target_skills):
     search_text = (item.get('name', '') + ' ' + (item.get('snippet', {}).get('requirement', '') or '')).lower()
     for skill in target_skills:
         if smart_contains(search_text, skill):
-            if skill in ['1с', '1c', 'зуп', 'zup', 'sap', 'kpi', 'okr', 'sql', 'hh.ru', 'кдп', 'тк рф']:
-                found.add(skill.upper().replace('ТК РФ', 'ТК РФ').replace('КДП', 'КДП'))
-            else:
-                found.add(skill.title())
+            found.add(skill.title())
     return list(found)
 
 def fetch_hh_paginated(text, employer_ids=None, area=None, schedule=None, period=SEARCH_PERIOD):
@@ -167,6 +170,7 @@ def process_items(items, role, rules, is_global=False):
 
         if is_sent(vac_id): continue
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
+        if any(stop_w in title_lower for stop_w in FACTORY_STOP_WORDS): continue
 
         exp = item.get('experience', {})
         if exp.get('id') == 'noExperience': continue
@@ -188,9 +192,12 @@ def process_items(items, role, rules, is_global=False):
 
         if is_global and has_office_marker: continue
         
-        has_hr = any(smart_contains(title, w) for w in rules["must_have_hr"])
-        has_role = any(smart_contains(title, w) for w in rules["must_have_role"])
-        is_direct = any(smart_contains(title, x) for x in ['hrd', 'hrbp'])
+        extended_hr_keywords = rules["must_have_hr"] + ['talent', 'people', 'acquisition', 'human']
+        extended_role_keywords = rules["must_have_role"] + ['partner', 'lead', 'head']
+
+        has_hr = any(smart_contains(title, w) for w in extended_hr_keywords)
+        has_role = any(smart_contains(title, w) for w in extended_role_keywords)
+        is_direct = any(smart_contains(title, x) for x in ['hrd', 'hrbp', 'hr director', 'hr-директор'])
         
         if not (is_direct or (has_hr and has_role)): continue
 
@@ -242,96 +249,103 @@ def process_items(items, role, rules, is_global=False):
         )
         
         send_telegram(msg)
-        mark_as_sent(vac_id)
+        mark_as_sent(vac_id, category=cat_emoji)
         logging.info(f"✅ Отправлено: {title} [ID: {vac_id}]")
         processed_count += 1
         time.sleep(0.5)
     return processed_count
 
 def get_smart_sleep_time():
-    # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ (MSK) ---
     now = datetime.utcnow() + timedelta(hours=3)
-    # ---------------------------------
+    
     if now.weekday() >= 5: 
         if now.hour < 11:
-             target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+             target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
         elif now.hour < 23:
-             target = now.replace(hour=23, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+             minutes_wait = 45 + random.randint(-5, 15)
+             target = now + timedelta(minutes=minutes_wait)
         else:
-             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
     else: 
         if now.hour >= 23 or now.hour < 7:
              base_date = now if now.hour < 7 else now + timedelta(days=1)
-             target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 30))
+             target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 20))
         elif 7 <= now.hour < 10:
-             minutes_wait = 60 + random.randint(-10, 15)
+             minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
         elif 10 <= now.hour < 20:
-             minutes_wait = 40 + random.randint(-5, 10)
+             minutes_wait = 10 + random.randint(0, 5)
              target = now + timedelta(minutes=minutes_wait)
         else:
-             minutes_wait = 60 + random.randint(-5, 20)
+             minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
 
     if target <= now:
         target = now + timedelta(minutes=5)
+        
     return max(10, (target - now).total_seconds()), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v5.2 (MSK Time) Started")
+    logging.info("🚀 HR Bot v5.3 (Production Ready) Started")
     send_telegram("🟢 <b>HR-мониторинг запущен (MSK)</b>")
     set_status("🚀 Запуск системы...")
     
-    daily_counter = 0
-
     while True:
-        check_remote_stop()
-        logging.info("=== Старт проверки (HR) ===")
-        set_status("🚀 Начинаю новый цикл поиска...")
-        
-        cycle_found = 0
-        for role, rules in PROFILES.items():
-            for q in rules["keywords"]:
-                set_status(f"🔎 Ищу: {q}")
-                for batch_ids in [ALL_IDS[i:i + 20] for i in range(0, len(ALL_IDS), 20)]:
+        try:
+            check_remote_stop()
+            logging.info("=== Старт проверки (HR) ===")
+            set_status("🚀 Начинаю новый цикл поиска...")
+            
+            for role, rules in PROFILES.items():
+                for q in rules["keywords"]:
+                    set_status(f"🔎 Ищу: {q}")
+                    extended_queries = [q, "HR Lead", "People Partner", "Head of Talent"]
+                    for query in list(set(extended_queries)):
+                        for batch_ids in [ALL_IDS[i:i + 20] for i in range(0, len(ALL_IDS), 20)]:
+                            check_remote_stop()
+                            found_items_map = {} 
+                            remote_items = fetch_hh_paginated(query, employer_ids=batch_ids, schedule="remote")
+                            for i in remote_items: found_items_map[i['id']] = i
+                            area_items = fetch_hh_paginated(query, employer_ids=batch_ids, area=TARGET_AREAS)
+                            for i in area_items: found_items_map[i['id']] = i
+                            process_items(list(found_items_map.values()), role, rules)
+
+            for role, rules in PROFILES.items():
+                for q in rules["keywords"]:
+                    set_status(f"🔎 Global поиск: {q}")
                     check_remote_stop()
-                    found_items_map = {} 
-                    remote_items = fetch_hh_paginated(q, employer_ids=batch_ids, schedule="remote")
-                    for i in remote_items: found_items_map[i['id']] = i
-                    area_items = fetch_hh_paginated(q, employer_ids=batch_ids, area=TARGET_AREAS)
-                    for i in area_items: found_items_map[i['id']] = i
-                    cycle_found += process_items(list(found_items_map.values()), role, rules)
+                    items = fetch_hh_paginated(q, employer_ids=None, schedule="remote", period=7)
+                    process_items(items, role, rules, is_global=True)
+            
+            now = datetime.utcnow() + timedelta(hours=3)
+            seconds, next_run = get_smart_sleep_time()
+            
+            stats = get_daily_stats()
+            total_today = sum(stats.values())
+            
+            if now.hour >= 23:
+                 msg = (
+                    f"🌙 <b>Итоги дня (HR):</b>\n"
+                    f"🔹 Топ компании: +{stats['Топ компании']}\n"
+                    f"🔹 Остальные: +{stats['Остальные']}"
+                )
+                 send_telegram(msg)
 
-        for role, rules in PROFILES.items():
-            for q in rules["keywords"]:
-                set_status(f"🔎 Global поиск: {q}")
-                check_remote_stop()
-                items = fetch_hh_paginated(q, employer_ids=None, schedule="remote", period=7)
-                cycle_found += process_items(items, role, rules, is_global=True)
+            logging.info(f"💤 Спим до {next_run.strftime('%H:%M')}")
+            set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total_today}")
+            
+            while seconds > 0:
+                check_remote_stop() 
+                sleep_chunk = min(seconds, 10) 
+                time.sleep(sleep_chunk)
+                seconds -= sleep_chunk
         
-        daily_counter += cycle_found
-        logging.info(f"🏁 Цикл HR завершен. +{cycle_found}")
-        
-        seconds, next_run = get_smart_sleep_time()
-        
-        # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ (MSK) ---
-        now = datetime.utcnow() + timedelta(hours=3)
-        # ---------------------------------
-        
-        if now.hour >= 23 and daily_counter > 0:
-            send_telegram(f"🌙 <b>Итоги дня (HR):</b> {daily_counter} вак.")
-            daily_counter = 0
-
-        logging.info(f"💤 Спим до {next_run.strftime('%H:%M')}")
-        set_status(f"💤 Сплю до {next_run.strftime('%H:%M')}. За сегодня: {daily_counter}")
-        
-        while seconds > 0:
-            check_remote_stop() 
-            sleep_chunk = min(seconds, 10) 
-            time.sleep(sleep_chunk)
-            seconds -= sleep_chunk
+        except Exception as e:
+            logging.error(f"CRITICAL ERROR in main loop: {e}")
+            send_telegram(f"⚠️ <b>Ошибка в HR боте:</b> {e}. Перезапуск через 1 мин.")
+            time.sleep(60)
 
 if __name__ == "__main__":
     try:

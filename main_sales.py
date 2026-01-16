@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import time
 import requests
 import re
@@ -5,26 +6,37 @@ import sys
 import signal
 import logging
 import random
+import os
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(BASE_DIR, "log_sales.txt")
+STATUS_FILE = os.path.join(BASE_DIR, "status_sales.txt")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 from config_sales import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, SEARCH_PERIOD, BLACKLISTED_AREAS, USER_AGENT, DB_NAME
-from db import init_db, is_sent, mark_as_sent, set_db_name
+from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 
 try:
     from whitelist import APPROVED_COMPANIES
 except ImportError:
     APPROVED_COMPANIES = {}
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-
 session = requests.Session()
 session.headers.update({'User-Agent': USER_AGENT})
 
-set_db_name(DB_NAME)
+set_db_name(os.path.join(BASE_DIR, DB_NAME))
 BOT_ID = TG_TOKEN.split(':')[0] if TG_TOKEN else "0"
 LAST_UPDATE_ID = 0
 
@@ -36,14 +48,12 @@ CAT_ALIASES = {
     'ОСТАЛЬНЫЕ': '🌐'
 }
 
-# --- ФУНКЦИЯ СТАТУСА (MSK TIME) ---
 def set_status(text):
     try:
-        with open("status_sales.txt", "w", encoding="utf-8") as f:
+        with open(STATUS_FILE, "w", encoding="utf-8") as f:
             now = (datetime.utcnow() + timedelta(hours=3)).strftime("%H:%M")
             f.write(f"[{now}] {text}")
     except: pass
-# -----------------------
 
 def signal_handler(sig, frame):
     logging.info("🛑 Получен сигнал остановки.")
@@ -98,7 +108,10 @@ def smart_contains(text, word):
 
 def is_individual_person(emp_name):
     name_lower = emp_name.lower().strip()
-    if name_lower.startswith('ип ') or ' ип' in name_lower: return True
+    
+    if 'ип ' in name_lower or ' ип' in name_lower or '(ип' in name_lower:
+        return True
+
     if '.' in name_lower: return True 
     parts = re.split(r'[\s-]+', name_lower)
     for part in parts:
@@ -196,7 +209,7 @@ def process_items(items, role, rules, is_global=False):
         
         spam_signature = f"{emp_id}_{title_lower}"
         if spam_signature in spam_deduplication_cache:
-            mark_as_sent(vac_id)
+            mark_as_sent(vac_id, category='Остальные')
             logging.info(f"♻️ Спам-фильтр: Скрыт дубль {title} (ID: {vac_id})")
             continue
         else:
@@ -270,35 +283,35 @@ def process_items(items, role, rules, is_global=False):
         )
         
         send_telegram(msg)
-        mark_as_sent(vac_id)
+        mark_as_sent(vac_id, category=cat_emoji)
         logging.info(f"✅ Found Sales: {title} [ID: {vac_id}]")
         processed_count += 1
         time.sleep(0.5)
     return processed_count
 
 def get_smart_sleep_time():
-    # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ (MSK) ---
     now = datetime.utcnow() + timedelta(hours=3)
-    # ---------------------------------
+    
     if now.weekday() >= 5: 
         if now.hour < 11:
-             target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+             target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
         elif now.hour < 23:
-             target = now.replace(hour=23, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+             minutes_wait = 45 + random.randint(-5, 15)
+             target = now + timedelta(minutes=minutes_wait)
         else:
-             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 45))
+             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
     else: 
         if now.hour >= 23 or now.hour < 7:
              base_date = now if now.hour < 7 else now + timedelta(days=1)
-             target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 30))
+             target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 20))
         elif 7 <= now.hour < 10:
-             minutes_wait = 60 + random.randint(-10, 15)
+             minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
         elif 10 <= now.hour < 20:
-             minutes_wait = 40 + random.randint(-5, 10)
+             minutes_wait = 10 + random.randint(0, 5)
              target = now + timedelta(minutes=minutes_wait)
         else:
-             minutes_wait = 60 + random.randint(-5, 20)
+             minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
 
     if target <= now:
@@ -308,48 +321,52 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Sales Bot v5.2 (MSK Time) Started")
+    logging.info("🚀 Sales Bot v5.3 (Production Ready) Started")
     send_telegram("🟢 <b>Sales-мониторинг запущен (MSK)</b>")
     set_status("🚀 Запуск системы...")
     
-    daily_counter = 0
-    
     while True:
-        check_remote_stop()
-        logging.info("=== Старт проверки (Sales) ===")
-        set_status("🚀 Начинаю новый цикл...")
-        
-        cycle_found = 0
-        for role, rules in PROFILES.items():
-            for q in rules["keywords"]:
-                set_status(f"🔎 Ищу: {q}")
-                check_remote_stop()
-                items = fetch_hh_paginated(q, schedule="remote", period=7)
-                if items:
-                    logging.info(f"🔎 Checking '{q}'")
-                    cycle_found += process_items(items, role, rules, is_global=True)
-        
-        daily_counter += cycle_found
-        logging.info(f"🏁 Цикл Sales завершен. +{cycle_found}")
-        
-        seconds, next_run = get_smart_sleep_time()
-        
-        # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ (MSK) ---
-        now = datetime.utcnow() + timedelta(hours=3)
-        # ---------------------------------
-        
-        if now.hour >= 23 and daily_counter > 0:
-            send_telegram(f"🌙 <b>Итоги дня (Sales):</b> {daily_counter}")
-            daily_counter = 0
-        
-        logging.info(f"💤 Спим до {next_run.strftime('%H:%M %d.%m')}")
-        set_status(f"💤 Сплю до {next_run.strftime('%H:%M')}. За сегодня: {daily_counter}")
-        
-        while seconds > 0:
+        try:
             check_remote_stop()
-            sleep_chunk = min(seconds, 10)
-            time.sleep(sleep_chunk)
-            seconds -= sleep_chunk
+            logging.info("=== Старт проверки (Sales) ===")
+            set_status("🚀 Начинаю новый цикл...")
+            
+            for role, rules in PROFILES.items():
+                for q in rules["keywords"]:
+                    set_status(f"🔎 Ищу: {q}")
+                    check_remote_stop()
+                    items = fetch_hh_paginated(q, schedule="remote", period=7)
+                    if items:
+                        logging.info(f"🔎 Checking '{q}'")
+                        process_items(items, role, rules, is_global=True)
+            
+            now = datetime.utcnow() + timedelta(hours=3)
+            seconds, next_run = get_smart_sleep_time()
+            
+            stats = get_daily_stats()
+            total_today = sum(stats.values())
+            
+            if now.hour >= 23:
+                msg = (
+                    f"🌙 <b>Итоги дня (Sales):</b>\n"
+                    f"🔹 Топ компании: +{stats['Топ компании']}\n"
+                    f"🔹 Остальные: +{stats['Остальные']}"
+                )
+                send_telegram(msg)
+            
+            logging.info(f"💤 Спим до {next_run.strftime('%H:%M %d.%m')}")
+            set_status(f"💤 Сплю до {next_run.strftime('%H:%M')}. За сегодня: {total_today}")
+            
+            while seconds > 0:
+                check_remote_stop()
+                sleep_chunk = min(seconds, 10)
+                time.sleep(sleep_chunk)
+                seconds -= sleep_chunk
+        
+        except Exception as e:
+            logging.error(f"CRITICAL ERROR in main loop: {e}")
+            send_telegram(f"⚠️ <b>Ошибка в Sales боте:</b> {e}. Перезапуск через 1 мин.")
+            time.sleep(60)
 
 if __name__ == "__main__":
     try:
