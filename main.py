@@ -10,15 +10,12 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения
 load_dotenv()
 
-# Опеределяем рабочую директорию
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(BASE_DIR, "log_hr.txt")
 STATUS_FILE = os.path.join(BASE_DIR, "status_hr.txt")
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -94,8 +91,7 @@ def init_updates():
         resp = requests.get(url, params={"limit": 1, "offset": -1}, timeout=5).json()
         if resp.get("result"):
             LAST_UPDATE_ID = resp["result"][0]["update_id"]
-    except Exception as e:
-        logging.warning(f"Init updates warning: {e}")
+    except: pass
 
 def check_remote_stop():
     global LAST_UPDATE_ID
@@ -115,8 +111,7 @@ def check_remote_stop():
                     if "стоп" in text or "stop" in text:
                         send_telegram("🛑 <b>HR-мониторинг остановлен командой</b>")
                         sys.exit(0)
-    except Exception as e:
-        logging.warning(f"Remote stop check warning: {e}")
+    except: pass
 
 def smart_contains(text, word):
     word_lower = word.lower()
@@ -137,7 +132,6 @@ def get_clean_category(cat_raw):
     clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
     return CAT_ALIASES.get(clean, '🌐')
 
-# --- BATCH FETCHING ---
 def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
     all_items = []
     page = 0
@@ -163,7 +157,25 @@ def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
             break
     return all_items
 
-# --- FILTERING ---
+def fetch_hh_paginated_global(text, period=7):
+    all_items = []
+    page = 0
+    # 🔥 УБРАЛИ schedule='remote', чтобы ловить скрытую удаленку
+    params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period}
+    while page < 10:
+        params["page"] = page
+        try:
+            resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
+            data = resp.json()
+            items = data.get("items", [])
+            if not items: break
+            all_items.extend(items)
+            if page >= data.get('pages', 0) - 1: break
+            page += 1
+            time.sleep(random.uniform(0.3, 1.0))
+        except: break
+    return all_items
+
 def filter_and_process(items, rules, is_global=False):
     unique_items = {v['id']: v for v in items}.values()
 
@@ -172,13 +184,11 @@ def filter_and_process(items, rules, is_global=False):
         title = item['name']
         title_lower = title.lower()
         
-        # Если уже отправляли - пропускаем
         if is_sent(vac_id): continue
 
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
         if any(stop_w in title_lower for stop_w in FACTORY_STOP_WORDS): continue
 
-        # Проверка HR-роли
         extended_hr_keywords = rules["must_have_hr"] + ['talent', 'people', 'acquisition', 'human']
         extended_role_keywords = rules["must_have_role"] + ['partner', 'lead', 'head']
 
@@ -191,6 +201,7 @@ def filter_and_process(items, rules, is_global=False):
         exp = item.get('experience', {})
         if exp.get('id') == 'noExperience': continue
 
+        # --- АНАЛИЗ ГРАФИКА РАБОТЫ (Детектор скрытой удаленки) ---
         details = []
         raw_schedule = item.get('schedule', {})
         raw_formats = item.get('work_format', [])
@@ -202,11 +213,26 @@ def filter_and_process(items, rules, is_global=False):
             details.append(f['name'])
 
         details_text = ", ".join(details).lower()
-        has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid'])
+        
+        # Проверяем текст требований на слова "удаленка" и "гибрид"
+        snippet = item.get('snippet', {}) or {}
+        req_text = (snippet.get('requirement') or '') + ' ' + (snippet.get('responsibility') or '')
+        req_text_lower = req_text.lower()
+        
+        has_remote_in_text = 'удален' in req_text_lower or 'remote' in req_text_lower or 'гибрид' in req_text_lower
+        
+        # Стандартные маркеры API
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
-        is_clean_remote = is_remote_explicit and not has_office_marker
+        has_office_marker = any(x in details_text for x in ['офис', 'на месте', 'office']) and not ('гибрид' in details_text)
 
-        if is_global and has_office_marker: continue
+        # Логика пропуска:
+        # Если это Глобал поиск и нет маркеров удаленки (ни в API, ни в тексте) -> Пропускаем
+        if is_global:
+            if not (is_remote_explicit or has_remote_in_text):
+                continue
+            # Если написано "Только офис" и в тексте нет про гибрид/удаленку -> Пропускаем
+            if has_office_marker and not has_remote_in_text:
+                continue
 
         found_skills = extract_skills(item, HR_HARD_SKILLS)
         skills_str = ", ".join(sorted(found_skills))
@@ -217,15 +243,14 @@ def filter_and_process(items, rules, is_global=False):
         threshold = 250000 if is_global else MIN_SALARY
         salary_value = 0
 
-        # --- FIX: Безопасное получение зарплаты ---
         if sal and sal.get('from'):
             if sal.get('currency') != 'RUR': continue
             if sal.get('from') < threshold: continue
             salary_text = f"от {sal.get('from')} {sal.get('currency','₽')}"
             is_bold_salary = True
             salary_value = sal.get('from')
-        elif is_global:
-            continue
+        
+        # Вакансии без ЗП в глобале теперь проходят (мы убрали блок elif is_global: continue)
 
         emp = item.get('employer', {})
         emp_id = str(emp.get('id', ''))
@@ -238,7 +263,10 @@ def filter_and_process(items, rules, is_global=False):
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         
         fire_marker = ""
-        if is_whitelist and is_clean_remote:
+        # Если нашли скрытую удаленку, ставим огонек
+        if has_remote_in_text and not is_remote_explicit:
+            fire_marker = "🕵️ " 
+        elif is_whitelist:
             if salary_value > 250000:
                 fire_marker = "🔥🔥🔥 " if cat_emoji == '🏆' else "🔥🔥 "
             else:
@@ -260,24 +288,6 @@ def filter_and_process(items, rules, is_global=False):
         mark_as_sent(vac_id, category=cat_emoji)
         logging.info(f"✅ Отправлено: {title} [ID: {vac_id}]")
         time.sleep(0.5)
-
-def fetch_hh_paginated_global(text, period=7):
-    all_items = []
-    page = 0
-    params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period, "schedule": "remote"}
-    while page < 10:
-        params["page"] = page
-        try:
-            resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
-            data = resp.json()
-            items = data.get("items", [])
-            if not items: break
-            all_items.extend(items)
-            if page >= data.get('pages', 0) - 1: break
-            page += 1
-            time.sleep(random.uniform(0.3, 1.0))
-        except: break
-    return all_items
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
@@ -308,8 +318,8 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v5.6 (Stable & Safe) Started")
-    send_telegram("🟢 <b>HR-мониторинг запущен (Stable)</b>")
+    logging.info("🚀 HR Bot v5.8 (Generalist & Hidden Remote) Started")
+    send_telegram("🟢 <b>HR-мониторинг запущен (Gen & Hidden)</b>")
     set_status("🚀 Запуск системы...")
     
     while True:
@@ -327,7 +337,6 @@ def main_loop():
                 check_remote_stop()
                 found_items_map = {}
                 
-                # ДЛЯ ГИГАНТОВ (первые 10 пачек / 200 компаний) ищем только за 1 день
                 smart_period = 1 if i < 10 else 5
                 
                 remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=smart_period)
@@ -345,13 +354,13 @@ def main_loop():
             for role, rules in PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()
-                    items = fetch_hh_paginated_global(q, period=1) # Только свежее
+                    # Ищем ВСЁ подряд за 3 дня (без фильтра по удаленке в API)
+                    items = fetch_hh_paginated_global(q, period=3) 
                     filter_and_process(items, rules, is_global=True)
             
             now = datetime.utcnow() + timedelta(hours=3)
             seconds, next_run = get_smart_sleep_time()
             
-            # Получаем статистику (теперь она вернет правильные ключи)
             stats = get_daily_stats()
             total_today = sum(stats.values())
             
