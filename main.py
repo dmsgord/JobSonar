@@ -65,12 +65,10 @@ def set_status(text):
         with open(STATUS_FILE, "w", encoding="utf-8") as f:
             now = (datetime.utcnow() + timedelta(hours=3)).strftime("%H:%M")
             f.write(f"[{now}] {text}")
-    except Exception as e:
-        logging.error(f"Error writing status: {e}")
+    except: pass
 
 def signal_handler(sig, frame):
-    logging.info("🛑 Получен сигнал остановки.")
-    send_telegram("🛑 <b>HR-мониторинг остановлен</b>")
+    logging.info("🛑 Stop signal.")
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, signal_handler)
@@ -81,8 +79,7 @@ def send_telegram(text):
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
                       json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
                       timeout=10)
-    except Exception as e:
-        logging.error(f"Ошибка отправки в ТГ: {e}")
+    except: pass
 
 def init_updates():
     global LAST_UPDATE_ID
@@ -105,12 +102,9 @@ def check_remote_stop():
                 msg = update.get("message", {})
                 from_id = str(msg.get("from", {}).get("id", ""))
                 text = msg.get("text", "").lower()
-                
                 if from_id == BOT_ID: continue
                 if str(msg.get("chat", {}).get("id")) == str(TG_CHAT_ID):
-                    if "стоп" in text or "stop" in text:
-                        send_telegram("🛑 <b>HR-мониторинг остановлен командой</b>")
-                        sys.exit(0)
+                    if "стоп" in text: sys.exit(0)
     except: pass
 
 def smart_contains(text, word):
@@ -136,11 +130,9 @@ def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
     all_items = []
     page = 0
     params = {"order_by": "publication_time", "per_page": 100, "period": period}
-    
     if employer_ids: params["employer_id"] = employer_ids
     if area: params["area"] = area
     if schedule: params["schedule"] = schedule
-
     while page < 10: 
         params["page"] = page
         try:
@@ -152,15 +144,12 @@ def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
             if page >= data.get('pages', 0) - 1: break
             page += 1
             time.sleep(0.2)
-        except Exception as e:
-            logging.error(f"HH API Error: {e}")
-            break
+        except: break
     return all_items
 
 def fetch_hh_paginated_global(text, period=7):
     all_items = []
     page = 0
-    # 🔥 УБРАЛИ schedule='remote', чтобы ловить скрытую удаленку
     params = {"text": text, "order_by": "publication_time", "per_page": 100, "search_field": "name", "period": period}
     while page < 10:
         params["page"] = page
@@ -178,6 +167,7 @@ def fetch_hh_paginated_global(text, period=7):
 
 def filter_and_process(items, rules, is_global=False):
     unique_items = {v['id']: v for v in items}.values()
+    processed = 0
 
     for item in unique_items:
         vac_id = item['id']
@@ -201,7 +191,6 @@ def filter_and_process(items, rules, is_global=False):
         exp = item.get('experience', {})
         if exp.get('id') == 'noExperience': continue
 
-        # --- АНАЛИЗ ГРАФИКА РАБОТЫ (Детектор скрытой удаленки) ---
         details = []
         raw_schedule = item.get('schedule', {})
         raw_formats = item.get('work_format', [])
@@ -214,25 +203,21 @@ def filter_and_process(items, rules, is_global=False):
 
         details_text = ", ".join(details).lower()
         
-        # Проверяем текст требований на слова "удаленка" и "гибрид"
         snippet = item.get('snippet', {}) or {}
         req_text = (snippet.get('requirement') or '') + ' ' + (snippet.get('responsibility') or '')
         req_text_lower = req_text.lower()
         
         has_remote_in_text = 'удален' in req_text_lower or 'remote' in req_text_lower or 'гибрид' in req_text_lower
         
-        # Стандартные маркеры API
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
-        has_office_marker = any(x in details_text for x in ['офис', 'на месте', 'office']) and not ('гибрид' in details_text)
+        # Stop words for strict remote
+        stop_location = ['офис', 'на месте', 'office', 'гибрид', 'hybrid']
+        has_office_marker = any(x in details_text for x in stop_location)
 
-        # Логика пропуска:
-        # Если это Глобал поиск и нет маркеров удаленки (ни в API, ни в тексте) -> Пропускаем
+        # Global Logic
         if is_global:
-            if not (is_remote_explicit or has_remote_in_text):
-                continue
-            # Если написано "Только офис" и в тексте нет про гибрид/удаленку -> Пропускаем
-            if has_office_marker and not has_remote_in_text:
-                continue
+            if not (is_remote_explicit or has_remote_in_text): continue
+            if has_office_marker and not has_remote_in_text: continue
 
         found_skills = extract_skills(item, HR_HARD_SKILLS)
         skills_str = ", ".join(sorted(found_skills))
@@ -250,8 +235,6 @@ def filter_and_process(items, rules, is_global=False):
             is_bold_salary = True
             salary_value = sal.get('from')
         
-        # Вакансии без ЗП в глобале теперь проходят (мы убрали блок elif is_global: continue)
-
         emp = item.get('employer', {})
         emp_id = str(emp.get('id', ''))
         
@@ -263,14 +246,13 @@ def filter_and_process(items, rules, is_global=False):
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         
         fire_marker = ""
-        # Если нашли скрытую удаленку, ставим огонек
+        # 🔥 UNIFIED FIRE LOGIC 🔥
+        # 1. Hidden Remote -> Spy
         if has_remote_in_text and not is_remote_explicit:
-            fire_marker = "🕵️ " 
-        elif is_whitelist:
-            if salary_value > 250000:
-                fire_marker = "🔥🔥🔥 " if cat_emoji == '🏆' else "🔥🔥 "
-            else:
-                fire_marker = "🔥 "
+            fire_marker = "🕵️ "
+        # 2. Strict Whitelist + Clean Remote -> Fire (Single)
+        elif is_whitelist and is_remote_explicit and not has_office_marker:
+            fire_marker = "🔥 "
 
         salary_html = f"<b>{salary_text}</b>" if is_bold_salary else salary_text
         skills_block = f"🛠 <b>{skills_str}</b>\n" if skills_str else ""
@@ -286,108 +268,92 @@ def filter_and_process(items, rules, is_global=False):
         
         send_telegram(msg)
         mark_as_sent(vac_id, category=cat_emoji)
-        logging.info(f"✅ Отправлено: {title} [ID: {vac_id}]")
+        logging.info(f"✅ HR Sent: {title}")
+        processed += 1
         time.sleep(0.5)
+    return processed
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
-    if now.weekday() >= 5: 
+    
+    # 💤 Fix Monday Morning: If Sunday night (6) -> Sleep until Monday 08:00
+    if now.weekday() == 6 and now.hour >= 20:
+        target = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0)
+        return (target - now).total_seconds(), target
+
+    if now.weekday() >= 5: # Sat-Sun (Daytime)
         if now.hour < 11:
              target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
         elif now.hour < 23:
              minutes_wait = 45 + random.randint(-5, 15)
              target = now + timedelta(minutes=minutes_wait)
-        else:
-             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
-    else: 
+        else: # Late night weekend
+             target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0)
+    else: # Weekdays
         if now.hour >= 23 or now.hour < 7:
              base_date = now if now.hour < 7 else now + timedelta(days=1)
              target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 20))
-        elif 7 <= now.hour < 10:
+        else: # Work hours
              minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
-        elif 10 <= now.hour < 20:
-             minutes_wait = 10 + random.randint(0, 5)
-             target = now + timedelta(minutes=minutes_wait)
-        else:
-             minutes_wait = 20 + random.randint(0, 10)
-             target = now + timedelta(minutes=minutes_wait)
+             
     if target <= now: target = now + timedelta(minutes=5)
     return max(10, (target - now).total_seconds()), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v5.8 (Generalist & Hidden Remote) Started")
-    send_telegram("🟢 <b>HR-мониторинг запущен (Gen & Hidden)</b>")
-    set_status("🚀 Запуск системы...")
+    logging.info("🚀 HR Bot v6.2 (Strict Fire & Sleep Fix) Started")
+    send_telegram("🟢 <b>HR Bot v6.2 Started</b>")
     
     while True:
         try:
             check_remote_stop()
-            logging.info("=== Старт проверки (HR) ===")
-            set_status("🚀 Начинаю поиск по компаниям...")
+            set_status("🚀 Поиск по Whitelist...")
             
-            # --- SMART BATCHING ---
             batch_size = 20
-            all_ids_list = ALL_IDS
-            batches = [all_ids_list[i:i + batch_size] for i in range(0, len(all_ids_list), batch_size)]
+            batches = [ALL_IDS[i:i + batch_size] for i in range(0, len(ALL_IDS), batch_size)]
             
             for i, batch_ids in enumerate(batches):
                 check_remote_stop()
-                found_items_map = {}
+                found_map = {}
+                per = 1 if i < 10 else 5
                 
-                smart_period = 1 if i < 10 else 5
+                remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=per)
+                for item in remote_items: found_map[item['id']] = item
                 
-                remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=smart_period)
-                for item in remote_items: found_items_map[item['id']] = item
+                area_items = fetch_company_vacancies(batch_ids, area=TARGET_AREAS, period=per)
+                for item in area_items: found_map[item['id']] = item
                 
-                area_items = fetch_company_vacancies(batch_ids, area=TARGET_AREAS, period=smart_period)
-                for item in area_items: found_items_map[item['id']] = item
-                
-                rules = PROFILES['HR']
-                filter_and_process(list(found_items_map.values()), rules)
+                filter_and_process(list(found_map.values()), PROFILES['HR'])
                 time.sleep(1)
 
-            # --- GLOBAL SEARCH ---
             set_status("🔎 Global поиск...")
             for role, rules in PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()
-                    # Ищем ВСЁ подряд за 3 дня (без фильтра по удаленке в API)
                     items = fetch_hh_paginated_global(q, period=3) 
                     filter_and_process(items, rules, is_global=True)
             
             now = datetime.utcnow() + timedelta(hours=3)
             seconds, next_run = get_smart_sleep_time()
-            
             stats = get_daily_stats()
-            total_today = sum(stats.values())
+            total = sum(stats.values())
             
             if now.hour >= 23:
-                 msg = (
-                    f"🌙 <b>Итоги дня (HR):</b>\n"
-                    f"🔹 Топ компании: +{stats.get('Топ компании', 0)}\n"
-                    f"🔹 Остальные: +{stats.get('Остальные', 0)}"
-                )
+                 msg = f"🌙 <b>Итоги HR:</b>\nТоп: {stats.get('🏆',0)+stats.get('🥇',0)}\nОст: {stats.get('🌐',0)}"
                  send_telegram(msg)
 
-            logging.info(f"💤 Спим до {next_run.strftime('%H:%M')}")
-            set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total_today}")
+            set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
             
             while seconds > 0:
                 check_remote_stop() 
-                sleep_chunk = min(seconds, 10) 
-                time.sleep(sleep_chunk)
-                seconds -= sleep_chunk
+                time.sleep(min(seconds, 10))
+                seconds -= 10
         
         except Exception as e:
-            logging.error(f"CRITICAL ERROR in main loop: {e}")
-            send_telegram(f"⚠️ Ошибка HR: {e}")
+            logging.error(f"Error: {e}")
             time.sleep(60)
 
 if __name__ == "__main__":
-    try:
-        main_loop()
-    except KeyboardInterrupt:
-        pass
+    main_loop()
