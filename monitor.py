@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 # Загрузка env
 load_dotenv()
 
+# ✅ СТРОГО КАК У ТЕБЯ В .ENV
 MONITOR_TOKEN = os.getenv("MONITOR_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     threading.Thread(target=background_checker, daemon=True).start()
     print("🤖 Monitor Bot запускается...")
     
-    # Auto-restart loop
+    # ✅ ВЕЧНЫЙ ЦИКЛ ПЕРЕЗАПУСКА (Self-Healing)
     while True:
         try:
             bot.infinity_polling(timeout=10, long_polling_timeout=5)
