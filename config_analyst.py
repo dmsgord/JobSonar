@@ -3,9 +3,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Читаем настройки TECH-бота
-TG_TOKEN = os.getenv("TG_TOKEN_TECH")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID_TECH")
+# --- ТОКЕНЫ (Analyst) ---
+TG_TOKEN = os.getenv("TG_TOKEN_ANALYST")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID_ANALYST")
 
 # --- НАСТРОЙКИ ---
 USER_AGENT = 'JobSonarBot/4.28 (Analyst)'
@@ -21,7 +21,8 @@ BLACKLISTED_AREAS = ['40', '160', '159', '97', '48']
 PROFILES = {
     'Analyst': {
         'keywords': [
-            'Business Analyst', 'Бизнес-аналитик',
+            # ✅ Исправлено: добавлены вариации написания
+            'Business Analyst', 'Бизнес-аналитик', 'Бизнес аналитик',
             'Data Analyst', 'Дата аналитик', 'Аналитик данных',
             'Product Analyst', 'Продуктовый аналитик',
             'BI Analyst', 'BI-аналитик',
