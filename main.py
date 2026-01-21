@@ -210,11 +210,9 @@ def filter_and_process(items, rules, is_global=False):
         has_remote_in_text = 'удален' in req_text_lower or 'remote' in req_text_lower or 'гибрид' in req_text_lower
         
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
-        # Stop words for strict remote
         stop_location = ['офис', 'на месте', 'office', 'гибрид', 'hybrid']
         has_office_marker = any(x in details_text for x in stop_location)
 
-        # Global Logic
         if is_global:
             if not (is_remote_explicit or has_remote_in_text): continue
             if has_office_marker and not has_remote_in_text: continue
@@ -222,19 +220,44 @@ def filter_and_process(items, rules, is_global=False):
         found_skills = extract_skills(item, HR_HARD_SKILLS)
         skills_str = ", ".join(sorted(found_skills))
 
+        # --- 💰 НОВАЯ ЛОГИКА ЗАРПЛАТ (FIXED) ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
         threshold = 250000 if is_global else MIN_SALARY
-        salary_value = 0
+        has_good_salary = False
 
-        if sal and sal.get('from'):
-            if sal.get('currency') != 'RUR': continue
-            if sal.get('from') < threshold: continue
-            salary_text = f"от {sal.get('from')} {sal.get('currency','₽')}"
-            is_bold_salary = True
-            salary_value = sal.get('from')
+        if sal:
+            currency = sal.get('currency')
+            if currency == 'RUR':
+                lower = sal.get('from')
+                upper = sal.get('to')
+
+                if lower and lower >= threshold:
+                    salary_text = f"от {lower} ₽"
+                    is_bold_salary = True
+                    has_good_salary = True
+                elif upper and upper >= threshold:
+                    salary_text = f"до {upper} ₽"
+                    is_bold_salary = True
+                    has_good_salary = True
+                else:
+                    # Ниже порога
+                    pass
+            elif currency in ['USD', 'EUR']:
+                 salary_text = f"{sal.get('from', '')} - {sal.get('to', '')} {currency}".replace("None", "").strip("- ")
+                 is_bold_salary = True
+                 has_good_salary = True
         
+        # Если зарплата скрыта (None), мы все равно показываем вакансию (has_good_salary False, но мы не делаем continue)
+        # В HR боте мы не фильтруем жестко по наличию ЗП, мы просто не подсвечиваем её если она маленькая.
+        # Но если она маленькая, мы должны скипнуть? В оригинале было: if sal.get('from') < threshold: continue.
+        # Значит, если ЗП указана и она МАЛЕНЬКАЯ -> Скип.
+        
+        if sal and not has_good_salary and (sal.get('from') or sal.get('to')) and sal.get('currency') == 'RUR':
+             # ЗП указана в рублях, но не прошла порог (ни "от", ни "до" не выше threshold)
+             continue
+             
         emp = item.get('employer', {})
         emp_id = str(emp.get('id', ''))
         
@@ -246,11 +269,8 @@ def filter_and_process(items, rules, is_global=False):
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         
         fire_marker = ""
-        # 🔥 UNIFIED FIRE LOGIC 🔥
-        # 1. Hidden Remote -> Spy
         if has_remote_in_text and not is_remote_explicit:
             fire_marker = "🕵️ "
-        # 2. Strict Whitelist + Clean Remote -> Fire (Single)
         elif is_whitelist and is_remote_explicit and not has_office_marker:
             fire_marker = "🔥 "
 
@@ -275,36 +295,32 @@ def filter_and_process(items, rules, is_global=False):
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
-    
-    # 💤 Fix Monday Morning: If Sunday night (6) -> Sleep until Monday 08:00
     if now.weekday() == 6 and now.hour >= 20:
         target = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0)
         return (target - now).total_seconds(), target
-
-    if now.weekday() >= 5: # Sat-Sun (Daytime)
+    if now.weekday() >= 5: 
         if now.hour < 11:
              target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
         elif now.hour < 23:
              minutes_wait = 45 + random.randint(-5, 15)
              target = now + timedelta(minutes=minutes_wait)
-        else: # Late night weekend
+        else:
              target = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0)
-    else: # Weekdays
+    else: 
         if now.hour >= 23 or now.hour < 7:
              base_date = now if now.hour < 7 else now + timedelta(days=1)
              target = base_date.replace(hour=7, minute=10, second=0) + timedelta(minutes=random.randint(0, 20))
-        else: # Work hours
+        else:
              minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
-             
     if target <= now: target = now + timedelta(minutes=5)
     return max(10, (target - now).total_seconds()), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v6.2 (Strict Fire & Sleep Fix) Started")
-    send_telegram("🟢 <b>HR Bot v6.2 Started</b>")
+    logging.info("🚀 HR Bot v6.3 (Salary Fix) Started")
+    send_telegram("🟢 <b>HR Bot v6.3 Started</b>")
     
     while True:
         try:
@@ -341,7 +357,7 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                 msg = f"🌙 <b>Итоги HR:</b>\nТоп: {stats.get('🏆',0)+stats.get('🥇',0)}\nОст: {stats.get('🌐',0)}"
+                 msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
                  send_telegram(msg)
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")

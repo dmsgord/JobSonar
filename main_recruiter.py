@@ -102,7 +102,6 @@ def smart_contains(text, word):
         return re.search(r'\b' + re.escape(word_lower) + r'\b', text_lower) is not None
     return word_lower in text_lower
 
-# --- 🔥 ANTI-IP LOGIC ADDED 🔥 ---
 def is_individual_person(emp_name):
     name_lower = emp_name.lower().strip()
     if 'ип ' in name_lower or ' ип' in name_lower or '(ип' in name_lower: return True
@@ -110,7 +109,7 @@ def is_individual_person(emp_name):
     for part in parts:
         if part.endswith('вич') or part.endswith('вна'): return True
         if part.endswith('оглы') or part.endswith('кызы'): return True
-    if len(parts) == 1: # Фамилия?
+    if len(parts) == 1:
         if name_lower.endswith(('ов', 'ова', 'ев', 'ева', 'ин', 'ина')):
             if not any(s in name_lower for s in ['групп', 'софт']): return True
     corp_whitelist = ['ооо', 'ао', 'пао', 'llc', 'групп', 'софт', 'tech', 'студия', 'agency', 'онлайн', 'бизнес']
@@ -157,7 +156,6 @@ def process_items(items, rules):
         emp_name = emp.get('name', '')
         emp_id = str(emp.get('id', ''))
         
-        # --- ANTI IP CHECK ---
         if is_individual_person(emp_name): continue
 
         spam_signature = f"{emp_id}_{title_lower}"
@@ -176,29 +174,43 @@ def process_items(items, rules):
         for f in raw_formats: details.append(f['name'])
         details_text = ", ".join(details).lower()
         
-        # Strict Remote check
         if any(x in details_text for x in ['гибрид', 'hybrid', 'офис', 'office', 'на месте']): continue
 
         snippet = item.get('snippet', {}) or {}
         full_text = (item.get('name', '') + ' ' + (snippet.get('requirement') or '')).lower()
         if any(smart_contains(full_text, stop) for stop in rules['stop_domains']): continue
 
+        # --- 💰 ЛОГИКА ЗАРПЛАТ (FIXED) ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
         threshold = MIN_SALARY
+        has_good_salary = False
         
-        if sal and sal.get('from'):
-            currency = sal.get('currency', '')
-            if currency not in ['RUR', 'USD', 'EUR']: continue  # 🚫 Block KZT, BYN etc
-            
-            if currency != 'RUR':
-                 salary_text = f"от {sal.get('from')} {currency}"
+        if sal:
+            currency = sal.get('currency')
+            if currency not in ['RUR', 'USD', 'EUR']: continue # 🚫 Block KZT
+
+            if currency == 'RUR':
+                 lower = sal.get('from')
+                 upper = sal.get('to')
+                 if lower and lower >= threshold:
+                     salary_text = f"от {lower} ₽"
+                     is_bold_salary = True
+                     has_good_salary = True
+                 elif upper and upper >= threshold:
+                     salary_text = f"до {upper} ₽"
+                     is_bold_salary = True
+                     has_good_salary = True
+            else: # USD / EUR
+                 salary_text = f"{sal.get('from', '')} - {sal.get('to', '')} {currency}".replace("None", "").strip("- ")
                  is_bold_salary = True
-            else:
-                 if sal.get('from') < threshold: continue 
-                 salary_text = f"от {sal.get('from')} {currency}"
-                 is_bold_salary = True
+                 has_good_salary = True
+        
+        # Рекрутер: либо хорошая ЗП, либо скрытая (sal is None).
+        # Если ЗП указана в рублях и она НИЖЕ порога -> Скип.
+        if sal and not has_good_salary and sal.get('currency') == 'RUR':
+             continue
         
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
         cat_emoji = get_clean_category(cat_raw)
@@ -207,9 +219,7 @@ def process_items(items, rules):
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         
-        # 🔥 UNIFIED FIRE LOGIC 🔥
         fire_marker = ""
-        # 1. Whitelist + Remote (implied by this bot) -> Fire
         if is_whitelist:
              fire_marker = "🔥 "
 
@@ -231,12 +241,9 @@ def process_items(items, rules):
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
-    
-    # 💤 Fix Monday Morning
     if now.weekday() == 6 and now.hour >= 20:
         target = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0)
         return (target - now).total_seconds(), target
-
     if now.hour >= 23 or now.hour < 9:
          return 3600, now + timedelta(hours=1)
     else:
@@ -246,7 +253,7 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Recruiter Bot v1.2 (Anti-IP) Started")
+    logging.info("🚀 Recruiter Bot v1.2 (Salary Fix) Started")
     send_telegram("🟢 <b>Recruiter Bot v1.2 Started</b>")
     
     while True:
@@ -268,6 +275,7 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour == 23 and now.minute < 30:
+                # ✅ ИСПРАВЛЕНО
                 msg = f"🌙 <b>Итоги Recruiter:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
                 send_telegram(msg)
             

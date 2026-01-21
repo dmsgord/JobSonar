@@ -193,23 +193,35 @@ def process_items(items, role, rules, is_global=False):
 
         if not check_domain_relevance(item, rules['digital_markers'], rules['stop_domains']): continue
 
+        # --- 💰 НОВАЯ ЛОГИКА ЗАРПЛАТ (FIXED) ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
         threshold = MIN_SALARY
-        salary_value = 0
+        has_good_salary = False
         
-        if sal and sal.get('from'):
-            if sal.get('currency') not in ['RUR', 'USD', 'EUR']: continue
-            if sal.get('currency') == 'RUR':
-                 if sal.get('from') < threshold: continue 
-                 salary_text = f"от {sal.get('from')} {sal.get('currency','₽')}"
+        if sal:
+            currency = sal.get('currency')
+            if currency == 'RUR':
+                lower = sal.get('from')
+                upper = sal.get('to')
+                # Sales: строго отсекаем низкие
+                if lower and lower >= threshold:
+                    salary_text = f"от {lower} ₽"
+                    is_bold_salary = True
+                    has_good_salary = True
+                elif upper and upper >= threshold:
+                    salary_text = f"до {upper} ₽"
+                    is_bold_salary = True
+                    has_good_salary = True
+            elif currency in ['USD', 'EUR']:
+                 salary_text = f"{sal.get('from', '')} - {sal.get('to', '')} {currency}".replace("None", "").strip("- ")
                  is_bold_salary = True
-                 salary_value = sal.get('from')
-            else:
-                 salary_text = f"от {sal.get('from')} {sal.get('currency')}"
-                 is_bold_salary = True
-                 salary_value = 999999 
+                 has_good_salary = True
+        
+        if not has_good_salary and sal and sal.get('currency') == 'RUR':
+             # Если ЗП указана, но она низкая -> Скип
+             continue
         
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
         cat_emoji = get_clean_category(cat_raw)
@@ -218,9 +230,8 @@ def process_items(items, role, rules, is_global=False):
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         
-        # 🔥 UNIFIED FIRE LOGIC 🔥
         fire_marker = "🤝 " 
-        if is_whitelist: # Remote is already checked
+        if is_whitelist:
              fire_marker = "🔥 "
 
         salary_html = f"<b>{salary_text}</b>" if is_bold_salary else salary_text
@@ -241,12 +252,9 @@ def process_items(items, role, rules, is_global=False):
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
-    
-    # 💤 Fix Monday Morning
     if now.weekday() == 6 and now.hour >= 20:
         target = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0)
         return (target - now).total_seconds(), target
-
     if now.weekday() >= 5: 
         if now.hour < 11:
              target = now.replace(hour=11, minute=0, second=0) + timedelta(minutes=random.randint(0, 30))
@@ -262,15 +270,14 @@ def get_smart_sleep_time():
         else:
              minutes_wait = 20 + random.randint(0, 10)
              target = now + timedelta(minutes=minutes_wait)
-             
     if target <= now: target = now + timedelta(minutes=5)
     return max(10, (target - now).total_seconds()), target
 
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Sales Bot v5.7 (Unified) Started")
-    send_telegram("🟢 <b>Sales Bot v5.7 Started</b>")
+    logging.info("🚀 Sales Bot v6.3 (Salary Fix) Started")
+    send_telegram("🟢 <b>Sales Bot v6.3 Started</b>")
     
     while True:
         try:
@@ -291,7 +298,7 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                msg = f"🌙 <b>Итоги Sales:</b>\nТоп: {stats.get('🏆',0)+stats.get('🥇',0)}\nОст: {stats.get('🌐',0)}"
+                msg = f"🌙 <b>Итоги Sales:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
                 send_telegram(msg)
             
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")

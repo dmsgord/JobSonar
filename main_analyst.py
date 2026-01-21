@@ -202,29 +202,40 @@ def filter_and_process(items, rules, is_global=False):
             if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
                 continue
         
-        # --- BA BYPASS LOGIC ---
         found_skills = extract_skills(item, rules['target_skills'])
-        
-        is_ba_title = 'business analyst' in title_lower or 'бизнес-аналитик' in title_lower
+        is_ba_title = 'business analyst' in title_lower or 'бизнес-аналитик' in title_lower or 'бизнес аналитик' in title_lower
         
         if not is_ba_title:
              if len(found_skills) < 2: continue
         
+        # --- 💰 НОВАЯ ЛОГИКА ЗАРПЛАТ (FIXED) ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
         threshold = MIN_SALARY
         has_good_salary = False
-        salary_value = 0
         
-        if sal and sal.get('from'):
-            if sal.get('currency') == 'RUR' and sal.get('from') >= threshold:
-                salary_text = f"от {sal.get('from')} {sal.get('currency','₽')}"
-                is_bold_salary = True
-                has_good_salary = True
-                salary_value = sal.get('from')
-            elif sal.get('currency') != 'RUR': continue 
-            else: continue 
+        if sal:
+            currency = sal.get('currency')
+            if currency == 'RUR':
+                lower = sal.get('from')
+                upper = sal.get('to')
+
+                if lower and lower >= threshold:
+                    salary_text = f"от {lower} ₽"
+                    is_bold_salary = True
+                    has_good_salary = True
+                elif upper and upper >= threshold:
+                    salary_text = f"до {upper} ₽"
+                    is_bold_salary = True
+                    has_good_salary = True
+                else:
+                    # Если указана ЗП, но она НИЖЕ порога (и "от", и "до") -> Пропускаем
+                    if not has_good_salary: continue
+            elif currency: 
+                # Валюта указана, но не RUR -> Пропускаем
+                continue
+        # Если sal is None -> ЗП скрыта -> Идет как "-" (has_good_salary=False)
         
         if not has_good_salary:
             weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
@@ -242,7 +253,6 @@ def filter_and_process(items, rules, is_global=False):
 
         # 🔥 UNIFIED FIRE LOGIC 🔥
         fire_marker = ""
-        # 1. Whitelist + Clean Remote -> Fire
         if is_whitelist and is_clean_remote:
              fire_marker = "🔥 "
 
