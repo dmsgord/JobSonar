@@ -132,4 +132,11 @@ def background_checker():
 if __name__ == "__main__":
     threading.Thread(target=background_checker, daemon=True).start()
     print("🤖 Monitor Bot запускается...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    
+    # Auto-restart loop
+    while True:
+        try:
+            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        except Exception as e:
+            print(f"⚠️ Polling упал: {e}. Рестарт через 5 сек...")
+            time.sleep(5)

@@ -189,12 +189,15 @@ def process_items(items, rules):
         threshold = MIN_SALARY
         
         if sal and sal.get('from'):
-            if sal.get('currency') != 'RUR':
-                 salary_text = f"от {sal.get('from')} {sal.get('currency')}"
+            currency = sal.get('currency', '')
+            if currency not in ['RUR', 'USD', 'EUR']: continue  # 🚫 Block KZT, BYN etc
+            
+            if currency != 'RUR':
+                 salary_text = f"от {sal.get('from')} {currency}"
                  is_bold_salary = True
             else:
                  if sal.get('from') < threshold: continue 
-                 salary_text = f"от {sal.get('from')} {sal.get('currency','₽')}"
+                 salary_text = f"от {sal.get('from')} {currency}"
                  is_bold_salary = True
         
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
@@ -265,7 +268,7 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour == 23 and now.minute < 30:
-                msg = f"🌙 <b>Итоги Recruiter:</b>\nНайдено: {total}"
+                msg = f"🌙 <b>Итоги Recruiter:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
                 send_telegram(msg)
             
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")

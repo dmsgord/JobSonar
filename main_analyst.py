@@ -202,9 +202,14 @@ def filter_and_process(items, rules, is_global=False):
             if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
                 continue
         
+        # --- BA BYPASS LOGIC ---
         found_skills = extract_skills(item, rules['target_skills'])
-        if len(found_skills) < 2: continue
-
+        
+        is_ba_title = 'business analyst' in title_lower or 'бизнес-аналитик' in title_lower
+        
+        if not is_ba_title:
+             if len(found_skills) < 2: continue
+        
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -326,7 +331,7 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                 msg = f"🌙 <b>Итоги Analyst:</b>\nТоп: {stats.get('🏆',0)+stats.get('🥇',0)}\nОст: {stats.get('🌐',0)}"
+                 msg = f"🌙 <b>Итоги Analyst:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
                  send_telegram(msg)
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
