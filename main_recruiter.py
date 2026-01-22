@@ -160,7 +160,7 @@ def process_items(items, rules):
 
         spam_signature = f"{emp_id}_{title_lower}"
         if spam_signature in spam_deduplication_cache:
-            mark_as_sent(vac_id, category='Остальные')
+            # ✅ FIX: Не помечаем дубли как отправленные
             continue
         else:
             spam_deduplication_cache.add(spam_signature)
@@ -180,7 +180,7 @@ def process_items(items, rules):
         full_text = (item.get('name', '') + ' ' + (snippet.get('requirement') or '')).lower()
         if any(smart_contains(full_text, stop) for stop in rules['stop_domains']): continue
 
-        # --- 💰 ЛОГИКА ЗАРПЛАТ (FIXED) ---
+        # --- 💰 ЛОГИКА ЗАРПЛАТ ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -207,8 +207,6 @@ def process_items(items, rules):
                  is_bold_salary = True
                  has_good_salary = True
         
-        # Рекрутер: если ЗП в РУБЛЯХ и она низкая -> Скип. 
-        # Если скрытая или валютная -> Показываем.
         if sal and not has_good_salary and sal.get('currency') == 'RUR':
              continue
         
@@ -253,8 +251,8 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Recruiter Bot v1.2 (Salary Fix) Started")
-    send_telegram("🟢 <b>Recruiter Bot v1.2 Started</b>")
+    logging.info("🚀 Recruiter Bot v6.3 (Stats Fix) Started")
+    send_telegram("🟢 <b>Recruiter Bot v6.3 Started</b>")
     
     while True:
         try:
@@ -275,8 +273,8 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour == 23 and now.minute < 30:
-                # ✅ Исправленный текст итогов
-                msg = f"🌙 <b>Итоги Recruiter:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
+                # ✅ ФИКС СТАТИСТИКИ
+                msg = f"🌙 <b>Итоги Recruiter:</b>\nТоп компании: {stats.get('Топ компании',0)}\nОстальные: {stats.get('Остальные',0)}"
                 send_telegram(msg)
             
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")

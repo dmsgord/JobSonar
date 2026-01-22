@@ -202,13 +202,22 @@ def filter_and_process(items, rules, is_global=False):
             if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
                 continue
         
+        emp = item.get('employer', {})
+        emp_id = str(emp.get('id', ''))
+        cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
+        cat_emoji = get_clean_category(cat_raw)
+        is_whitelist = emp_id in APPROVED_COMPANIES
+
         found_skills = extract_skills(item, rules['target_skills'])
         is_ba_title = 'business analyst' in title_lower or 'бизнес-аналитик' in title_lower or 'бизнес аналитик' in title_lower
         
-        if not is_ba_title:
-             if len(found_skills) < 2: continue
+        # ✅ SOFT MODE: Для Whitelist снижаем порог входа до 1 скилла
+        min_skills = 1 if is_whitelist else 2
         
-        # --- 💰 НОВАЯ ЛОГИКА ЗАРПЛАТ (FIXED) ---
+        if not is_ba_title:
+             if len(found_skills) < min_skills: continue
+        
+        # --- 💰 ЛОГИКА ЗАРПЛАТ ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -230,28 +239,20 @@ def filter_and_process(items, rules, is_global=False):
                     is_bold_salary = True
                     has_good_salary = True
                 else:
-                    # Если указана ЗП, но она НИЖЕ порога (и "от", и "до") -> Пропускаем
                     if not has_good_salary: continue
             elif currency: 
-                # Валюта указана, но не RUR -> Пропускаем
                 continue
-        # Если sal is None -> ЗП скрыта -> Идет как "-" (has_good_salary=False)
         
         if not has_good_salary:
-            weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
-            if all(skill in weak_stack for skill in found_skills): continue 
-        
-        emp = item.get('employer', {})
-        emp_id = str(emp.get('id', ''))
-        cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
-        cat_emoji = get_clean_category(cat_raw)
-        is_whitelist = emp_id in APPROVED_COMPANIES
+            # ✅ SOFT MODE: Не отсекаем Whitelist за слабый стек
+            if not is_whitelist:
+                weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
+                if all(skill in weak_stack for skill in found_skills): continue 
         
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         skills_str = ", ".join(sorted(found_skills))
 
-        # 🔥 UNIFIED FIRE LOGIC 🔥
         fire_marker = ""
         if is_whitelist and is_clean_remote:
              fire_marker = "🔥 "
@@ -303,8 +304,8 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Analyst Bot v5.7 (Unified) Started")
-    send_telegram("🟢 <b>Analyst Bot v5.7 Started</b>")
+    logging.info("🚀 Analyst Bot v6.3 (Stats Fixed) Started")
+    send_telegram("🟢 <b>Analyst Bot v6.3 Started</b>")
     
     while True:
         try:
@@ -317,7 +318,7 @@ def main_loop():
             for i, batch_ids in enumerate(batches):
                 check_remote_stop()
                 found_map = {}
-                per = 1 if i < 10 else 5
+                per = 3 if i < 10 else 7  # ✅ Увеличил период поиска для Whitelist
                 
                 remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=per)
                 for item in remote_items: found_map[item['id']] = item
@@ -332,7 +333,7 @@ def main_loop():
             for role, rules in PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()
-                    items = fetch_hh_paginated_global(q, period=1)
+                    items = fetch_hh_paginated_global(q, period=3) # ✅ 3 дня для Global (было 1)
                     filter_and_process(items, rules, is_global=True)
             
             now = datetime.utcnow() + timedelta(hours=3)
@@ -341,7 +342,8 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                 msg = f"🌙 <b>Итоги Analyst:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
+                 # ✅ ФИКС СТАТИСТИКИ
+                 msg = f"🌙 <b>Итоги Analyst:</b>\nТоп компании: {stats.get('Топ компании',0)}\nОстальные: {stats.get('Остальные',0)}"
                  send_telegram(msg)
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")

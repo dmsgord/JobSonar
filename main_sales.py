@@ -172,7 +172,7 @@ def process_items(items, role, rules, is_global=False):
 
         spam_signature = f"{emp_id}_{title_lower}"
         if spam_signature in spam_deduplication_cache:
-            mark_as_sent(vac_id, category='Остальные')
+            # ✅ FIX: Не помечаем дубли как отправленные, просто пропускаем
             continue
         else:
             spam_deduplication_cache.add(spam_signature)
@@ -193,7 +193,7 @@ def process_items(items, role, rules, is_global=False):
 
         if not check_domain_relevance(item, rules['digital_markers'], rules['stop_domains']): continue
 
-        # --- 💰 НОВАЯ ЛОГИКА ЗАРПЛАТ (FIXED) ---
+        # --- 💰 ЛОГИКА ЗАРПЛАТ ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -220,7 +220,6 @@ def process_items(items, role, rules, is_global=False):
                  has_good_salary = True
         
         if not has_good_salary and sal and sal.get('currency') == 'RUR':
-             # Если ЗП указана, но она низкая -> Скип
              continue
         
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
@@ -276,7 +275,7 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Sales Bot v6.3 (Salary Fix) Started")
+    logging.info("🚀 Sales Bot v6.3 (Stats Fixed) Started")
     send_telegram("🟢 <b>Sales Bot v6.3 Started</b>")
     
     while True:
@@ -298,7 +297,8 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                msg = f"🌙 <b>Итоги Sales:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
+                # ✅ ФИКС СТАТИСТИКИ
+                msg = f"🌙 <b>Итоги Sales:</b>\nТоп компании: {stats.get('Топ компании',0)}\nОстальные: {stats.get('Остальные',0)}"
                 send_telegram(msg)
             
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")

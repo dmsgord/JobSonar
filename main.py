@@ -179,6 +179,11 @@ def filter_and_process(items, rules, is_global=False):
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
         if any(stop_w in title_lower for stop_w in FACTORY_STOP_WORDS): continue
 
+        # Whitelist Check
+        emp = item.get('employer', {})
+        emp_id = str(emp.get('id', ''))
+        is_whitelist = emp_id in APPROVED_COMPANIES
+
         extended_hr_keywords = rules["must_have_hr"] + ['talent', 'people', 'acquisition', 'human']
         extended_role_keywords = rules["must_have_role"] + ['partner', 'lead', 'head']
 
@@ -186,7 +191,15 @@ def filter_and_process(items, rules, is_global=False):
         has_role = any(smart_contains(title, w) for w in extended_role_keywords)
         is_direct = any(smart_contains(title, x) for x in ['hrd', 'hrbp', 'hr director', 'hr-директор'])
         
-        if not (is_direct or (has_hr and has_role)): continue
+        # ✅ SOFT MODE: Если Whitelist, допускаем более мягкое совпадение
+        pass_filter = is_direct or (has_hr and has_role)
+        if is_whitelist and not pass_filter:
+             # Если компания из топа, но вакансия называется нестандартно (например "Head of People"),
+             # то мы даем ей шанс, если есть хотя бы одно ключевое слово из расширенного списка ролей.
+             if has_role or has_hr:
+                 pass_filter = True
+
+        if not pass_filter: continue
 
         exp = item.get('experience', {})
         if exp.get('id') == 'noExperience': continue
@@ -220,7 +233,7 @@ def filter_and_process(items, rules, is_global=False):
         found_skills = extract_skills(item, HR_HARD_SKILLS)
         skills_str = ", ".join(sorted(found_skills))
 
-        # --- 💰 НОВАЯ ЛОГИКА ЗАРПЛАТ (FIXED) ---
+        # --- 💰 ЛОГИКА ЗАРПЛАТ ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -241,29 +254,16 @@ def filter_and_process(items, rules, is_global=False):
                     salary_text = f"до {upper} ₽"
                     is_bold_salary = True
                     has_good_salary = True
-                else:
-                    # Ниже порога
-                    pass
             elif currency in ['USD', 'EUR']:
                  salary_text = f"{sal.get('from', '')} - {sal.get('to', '')} {currency}".replace("None", "").strip("- ")
                  is_bold_salary = True
                  has_good_salary = True
         
-        # Если зарплата скрыта (None), мы все равно показываем вакансию (has_good_salary False, но мы не делаем continue)
-        # В HR боте мы не фильтруем жестко по наличию ЗП, мы просто не подсвечиваем её если она маленькая.
-        # Но если она маленькая, мы должны скипнуть? В оригинале было: if sal.get('from') < threshold: continue.
-        # Значит, если ЗП указана и она МАЛЕНЬКАЯ -> Скип.
-        
         if sal and not has_good_salary and (sal.get('from') or sal.get('to')) and sal.get('currency') == 'RUR':
-             # ЗП указана в рублях, но не прошла порог (ни "от", ни "до" не выше threshold)
              continue
              
-        emp = item.get('employer', {})
-        emp_id = str(emp.get('id', ''))
-        
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
         cat_emoji = get_clean_category(cat_raw)
-        is_whitelist = emp_id in APPROVED_COMPANIES
         
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
@@ -319,7 +319,7 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v6.3 (Salary Fix) Started")
+    logging.info("🚀 HR Bot v6.3 (Stats Fixed) Started")
     send_telegram("🟢 <b>HR Bot v6.3 Started</b>")
     
     while True:
@@ -333,7 +333,7 @@ def main_loop():
             for i, batch_ids in enumerate(batches):
                 check_remote_stop()
                 found_map = {}
-                per = 1 if i < 10 else 5
+                per = 3 if i < 10 else 7 # ✅ Увеличили глубину поиска для первых батчей
                 
                 remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=per)
                 for item in remote_items: found_map[item['id']] = item
@@ -357,7 +357,8 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                 msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('🏆',0)+stats.get('🥇',0)}\nОстальные: {stats.get('🌐',0)}"
+                 # ✅ ФИКС: Используем текстовые ключи, как возвращает db.py
+                 msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('Топ компании',0)}\nОстальные: {stats.get('Остальные',0)}"
                  send_telegram(msg)
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
