@@ -104,21 +104,17 @@ def smart_contains(text, word):
         return re.search(r'\b' + re.escape(word_lower) + r'\b', text_lower) is not None
     return word_lower in text_lower
 
-# ✅ НОВАЯ ФУНКЦИЯ: Забирает харды напрямую из API
 def get_vacancy_skills(vac_id):
     try:
         resp = session.get(f"https://api.hh.ru/vacancies/{vac_id}", timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             raw_skills = [s['name'] for s in data.get('key_skills', [])]
-            
-            # Фильтруем банальщину
             clean_skills = []
             for skill in raw_skills:
                 if skill.lower() not in BANAL_SKILLS:
                     clean_skills.append(skill)
-            
-            return clean_skills[:5] # Возвращаем топ-5
+            return clean_skills[:5] 
     except:
         pass
     return []
@@ -177,10 +173,9 @@ def filter_and_process(items, rules, is_global=False):
         
         if is_sent(vac_id): continue
 
-        # 1. ЖЕСТКИЙ ФИЛЬТР СТОП-СЛОВ (Anti-Trash)
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
 
-        # 2. ПРОВЕРКА НАЗВАНИЯ (Strict Logic)
+        # --- VALIDATION ---
         is_direct_hit = any(smart_contains(title, w) for w in rules['direct_titles'])
         
         has_role_level = any(smart_contains(title, w) for w in rules['role_levels'])
@@ -190,11 +185,10 @@ def filter_and_process(items, rules, is_global=False):
 
         if not (is_direct_hit or is_combo_hit): continue
 
-        # 3. ПРОВЕРКА ОПЫТА
         exp = item.get('experience', {})
         if exp.get('id') == 'noExperience': continue
 
-        # 4. ПРОВЕРКА ЛОКАЦИИ
+        # --- LOCATION & SCHEDULE ---
         details = []
         raw_schedule = item.get('schedule', {})
         raw_formats = item.get('work_format', [])
@@ -211,26 +205,32 @@ def filter_and_process(items, rules, is_global=False):
         req_text = (snippet.get('requirement') or '') + ' ' + (snippet.get('responsibility') or '')
         req_text_lower = req_text.lower()
         
-        has_remote_in_text = 'удален' in req_text_lower or 'remote' in req_text_lower or 'гибрид' in req_text_lower
+        # Маркеры
+        has_remote_in_text = 'удален' in req_text_lower or 'remote' in req_text_lower
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
-        stop_location = ['офис', 'на месте', 'office'] 
-        has_office_marker = any(x in details_text for x in stop_location)
+        
+        # СТОП-МАРКЕРЫ ДЛЯ ЛОГИКИ ОГНЯ И ГЕО
+        # Если есть ХОТЯ БЫ ОДНО из этих слов -> Это НЕ чистая удаленка
+        office_markers = ['офис', 'на месте', 'office', 'гибрид', 'hybrid', 'разъездной']
+        has_office_marker = any(x in details_text for x in office_markers)
 
         area_id = item.get('area', {}).get('id', '0')
         
-        # Логика городов: Мск/НН -> любой график, остальные -> только удаленка
+        # Логика пропуска вакансии:
         if area_id in TARGET_AREAS:
-            pass 
+            pass # Берем всё
         else:
+            # Не целевой город: Строго удаленка
             if not (is_remote_explicit or has_remote_in_text): continue
-            if has_office_marker and not is_remote_explicit: continue
+            # Если есть офис/гибрид, но город не Мск/НН -> Скип, даже если написано "удаленка" (иногда ставят и то и то)
+            # Хотя HH позволяет ставить "Удаленно" + "Гибрид". Если город левый, нам нужна возможность работать фулл удаленно.
+            # Оставим пропуск только если НЕТ удаленки.
+            pass
 
-        # --- ПОЛУЧЕНИЕ НАВЫКОВ ИЗ API ---
-        # Запрашиваем только для тех, кто прошел все фильтры
         real_skills = get_vacancy_skills(vac_id)
         skills_str = ", ".join(real_skills)
 
-        # --- 💰 ЛОГИКА ЗАРПЛАТ ---
+        # --- SALARY ---
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
@@ -269,6 +269,11 @@ def filter_and_process(items, rules, is_global=False):
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         
+        # 🔥 ОГОНЬ (Fire Logic v2.0 - STRICT)
+        # Условия:
+        # 1. Whitelist
+        # 2. ЕСТЬ явная удаленка (Remote)
+        # 3. НЕТ маркеров офиса, гибрида или разъездов (Clean)
         fire_marker = ""
         if is_whitelist and is_remote_explicit and not has_office_marker:
             fire_marker = "🔥 "
@@ -318,8 +323,8 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v6.5 (Skills API) Started")
-    send_telegram("🟢 <b>HR Bot v6.5 (Skills API) Started</b>")
+    logging.info("🚀 HR Bot v6.7 (Fire Fix) Started")
+    send_telegram("🟢 <b>HR Bot v6.7 (Fire Fix) Started</b>")
     
     while True:
         try:
