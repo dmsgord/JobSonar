@@ -25,7 +25,8 @@ logging.basicConfig(
     ]
 )
 
-from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, SEARCH_PERIOD, USER_AGENT, DB_NAME
+# Импортируем BANAL_SKILLS
+from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, SEARCH_PERIOD, USER_AGENT, DB_NAME, BANAL_SKILLS
 from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 
 try:
@@ -48,17 +49,6 @@ CAT_ALIASES = {
     'НЕБОЛЬШИЕ': '🥉',
     'ОСТАЛЬНЫЕ': '🌐'
 }
-
-HR_HARD_SKILLS = [
-    '1с', '1c', 'зуп', 'zup', 'sap', 'bitrix', 'битрикс', 'kpi', 'okr', 'c&b', 
-    'budgeting', 'бюджетирование', 'english', 'английский', 'potok', 'huntflow'
-]
-
-FACTORY_STOP_WORDS = [
-    'производств', 'цех', 'завод', 'мастер', 'участок', 'линия', 'смен', 
-    'двигател', 'машиностроен', 'металлург', 'конструктор', 'технолог', 
-    'промышлен', 'оборудован', 'апк', 'агро'
-]
 
 def set_status(text):
     try:
@@ -114,13 +104,24 @@ def smart_contains(text, word):
         return re.search(r'\b' + re.escape(word_lower) + r'\b', text_lower) is not None
     return word_lower in text_lower
 
-def extract_skills(item, target_skills):
-    found = set()
-    search_text = (item.get('name', '') + ' ' + (item.get('snippet', {}).get('requirement', '') or '')).lower()
-    for skill in target_skills:
-        if smart_contains(search_text, skill):
-            found.add(skill.title())
-    return list(found)
+# ✅ НОВАЯ ФУНКЦИЯ: Забирает харды напрямую из API
+def get_vacancy_skills(vac_id):
+    try:
+        resp = session.get(f"https://api.hh.ru/vacancies/{vac_id}", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            raw_skills = [s['name'] for s in data.get('key_skills', [])]
+            
+            # Фильтруем банальщину
+            clean_skills = []
+            for skill in raw_skills:
+                if skill.lower() not in BANAL_SKILLS:
+                    clean_skills.append(skill)
+            
+            return clean_skills[:5] # Возвращаем топ-5
+    except:
+        pass
+    return []
 
 def get_clean_category(cat_raw):
     clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
@@ -176,34 +177,24 @@ def filter_and_process(items, rules, is_global=False):
         
         if is_sent(vac_id): continue
 
+        # 1. ЖЕСТКИЙ ФИЛЬТР СТОП-СЛОВ (Anti-Trash)
         if any(stop_w in title_lower for stop_w in rules["stop_words"]): continue
-        if any(stop_w in title_lower for stop_w in FACTORY_STOP_WORDS): continue
 
-        # Whitelist Check
-        emp = item.get('employer', {})
-        emp_id = str(emp.get('id', ''))
-        is_whitelist = emp_id in APPROVED_COMPANIES
-
-        extended_hr_keywords = rules["must_have_hr"] + ['talent', 'people', 'acquisition', 'human']
-        extended_role_keywords = rules["must_have_role"] + ['partner', 'lead', 'head']
-
-        has_hr = any(smart_contains(title, w) for w in extended_hr_keywords)
-        has_role = any(smart_contains(title, w) for w in extended_role_keywords)
-        is_direct = any(smart_contains(title, x) for x in ['hrd', 'hrbp', 'hr director', 'hr-директор'])
+        # 2. ПРОВЕРКА НАЗВАНИЯ (Strict Logic)
+        is_direct_hit = any(smart_contains(title, w) for w in rules['direct_titles'])
         
-        # ✅ SOFT MODE: Если Whitelist, допускаем более мягкое совпадение
-        pass_filter = is_direct or (has_hr and has_role)
-        if is_whitelist and not pass_filter:
-             # Если компания из топа, но вакансия называется нестандартно (например "Head of People"),
-             # то мы даем ей шанс, если есть хотя бы одно ключевое слово из расширенного списка ролей.
-             if has_role or has_hr:
-                 pass_filter = True
+        has_role_level = any(smart_contains(title, w) for w in rules['role_levels'])
+        has_hr_context = any(smart_contains(title, w) for w in rules['hr_context'])
+        
+        is_combo_hit = has_role_level and has_hr_context
 
-        if not pass_filter: continue
+        if not (is_direct_hit or is_combo_hit): continue
 
+        # 3. ПРОВЕРКА ОПЫТА
         exp = item.get('experience', {})
         if exp.get('id') == 'noExperience': continue
 
+        # 4. ПРОВЕРКА ЛОКАЦИИ
         details = []
         raw_schedule = item.get('schedule', {})
         raw_formats = item.get('work_format', [])
@@ -221,17 +212,23 @@ def filter_and_process(items, rules, is_global=False):
         req_text_lower = req_text.lower()
         
         has_remote_in_text = 'удален' in req_text_lower or 'remote' in req_text_lower or 'гибрид' in req_text_lower
-        
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
-        stop_location = ['офис', 'на месте', 'office', 'гибрид', 'hybrid']
+        stop_location = ['офис', 'на месте', 'office'] 
         has_office_marker = any(x in details_text for x in stop_location)
 
-        if is_global:
+        area_id = item.get('area', {}).get('id', '0')
+        
+        # Логика городов: Мск/НН -> любой график, остальные -> только удаленка
+        if area_id in TARGET_AREAS:
+            pass 
+        else:
             if not (is_remote_explicit or has_remote_in_text): continue
-            if has_office_marker and not has_remote_in_text: continue
+            if has_office_marker and not is_remote_explicit: continue
 
-        found_skills = extract_skills(item, HR_HARD_SKILLS)
-        skills_str = ", ".join(sorted(found_skills))
+        # --- ПОЛУЧЕНИЕ НАВЫКОВ ИЗ API ---
+        # Запрашиваем только для тех, кто прошел все фильтры
+        real_skills = get_vacancy_skills(vac_id)
+        skills_str = ", ".join(real_skills)
 
         # --- 💰 ЛОГИКА ЗАРПЛАТ ---
         sal = item.get('salary')
@@ -262,16 +259,18 @@ def filter_and_process(items, rules, is_global=False):
         if sal and not has_good_salary and (sal.get('from') or sal.get('to')) and sal.get('currency') == 'RUR':
              continue
              
+        emp = item.get('employer', {})
+        emp_id = str(emp.get('id', ''))
+        
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
         cat_emoji = get_clean_category(cat_raw)
+        is_whitelist = emp_id in APPROVED_COMPANIES
         
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
         
         fire_marker = ""
-        if has_remote_in_text and not is_remote_explicit:
-            fire_marker = "🕵️ "
-        elif is_whitelist and is_remote_explicit and not has_office_marker:
+        if is_whitelist and is_remote_explicit and not has_office_marker:
             fire_marker = "🔥 "
 
         salary_html = f"<b>{salary_text}</b>" if is_bold_salary else salary_text
@@ -319,8 +318,8 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 HR Bot v6.3 (Stats Fixed) Started")
-    send_telegram("🟢 <b>HR Bot v6.3 Started</b>")
+    logging.info("🚀 HR Bot v6.5 (Skills API) Started")
+    send_telegram("🟢 <b>HR Bot v6.5 (Skills API) Started</b>")
     
     while True:
         try:
@@ -333,7 +332,7 @@ def main_loop():
             for i, batch_ids in enumerate(batches):
                 check_remote_stop()
                 found_map = {}
-                per = 3 if i < 10 else 7 # ✅ Увеличили глубину поиска для первых батчей
+                per = 3 if i < 10 else 7 
                 
                 remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=per)
                 for item in remote_items: found_map[item['id']] = item
@@ -357,7 +356,6 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                 # ✅ ФИКС: Используем текстовые ключи, как возвращает db.py
                  msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('Топ компании',0)}\nОстальные: {stats.get('Остальные',0)}"
                  send_telegram(msg)
 
