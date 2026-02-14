@@ -4,30 +4,38 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- ТОКЕНЫ ---
-# ✅ СТРОГО КАК У ТЕБЯ В .ENV
 TG_TOKEN = os.getenv("TG_TOKEN_RECRUITER")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID_RECRUITER")
 
 # --- НАСТРОЙКИ ---
-USER_AGENT = 'JobSonarBot/1.0 (Recruiter)'
+USER_AGENT = 'JobSonarBot/1.3 (Recruiter & Comms)'
 DB_NAME = "jobsonar_recruiter.db"
 
 CHECK_INTERVAL = 600
-MIN_SALARY = 100000  # Строго от 100к (или скрытая)
-SEARCH_PERIOD = 3     # Ищем свежее
+MIN_SALARY = 100000 
+SEARCH_PERIOD = 3 
 
 PROFILES = {
     'Recruiter': {
         'keywords': [
+            # Классический подбор
             'IT Recruiter', 'IT Рекрутер', 'IT-рекрутер',
-            'Recruiter', 'Рекрутер',
-            'Sourcer', 'Сорсер',
+            'Recruiter', 'Рекрутер', 'Sourcer', 'Сорсер',
             'Talent Acquisition', 'Talent Manager',
             'Менеджер по подбору', 'Специалист по подбору',
-            'Talent Scout', 'Researcher'
+            'Talent Scout', 'Researcher',
+            
+            # Внутренние коммуникации и Корп. культура
+            'Внутренние коммуникации', 'Internal communications', 
+            'Корпоративная культура', 'Corporate culture',
+            'Обучение персонала', 'Развитие персонала', 'T&D', 'L&D', 'Обучение и развитие',
+            'Оценка персонала', 'Assessment', 
+            'Организация мероприятий', 'Event manager', # Осторожно, могут лезть обычные ивенты
+            'HR аналитика', 'HR аналитик', 'Аналитик по персоналу',
+            'Опросы персонала', 'Вовлеченность персонала', 'Менеджер по вовлеченности',
+            'Employee engagement', 'DevRel', 'Марчар', 'MarHR'
         ],
 
-        # Стоп-слова В ЗАГОЛОВКЕ
         'stop_words_title': [
             # Начальство
             'director', 'директор', 'head', 'lead', 'лидер', 'руководитель', 
@@ -35,12 +43,8 @@ PROFILES = {
             'team lead', 'тимлид', 'group head', 'заместитель',
             
             # Не те роли
-            'generalist', 'дженералист', 'hrg',
-            'hrbp', 'partner', 'партнер',
+            'generalist', 'дженералист', 'hrg', 'hrbp', 'partner', 'партнер',
             'admin', 'админ', 'assistant', 'ассистент', 'стажер', 'intern',
-            'happiness', 'brand', 'бренд', 'marhr', 'devrel',
-            'c&b', 't&d', 'l&d', 'train', 'обучени', 'методолог',
-            'culture', 'культур', 'event', 'ивент', 'office', 'офис',
             'account', 'sales', 'продаж',
             
             # Кадровики / Бумажки
