@@ -25,7 +25,7 @@ logging.basicConfig(
     ]
 )
 
-from config_analyst import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, SEARCH_PERIOD, BLACKLISTED_AREAS, USER_AGENT, DB_NAME, TARGET_AREAS
+from config_analyst import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, SEARCH_PERIOD, BLACKLISTED_AREAS, USER_AGENT, DB_NAME, TARGET_AREAS, BANAL_SKILLS
 from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 
 try:
@@ -114,6 +114,19 @@ def extract_skills(item, target_skills):
                 found.add(skill.title())
     return list(found)
 
+# Вытягиваем харды из API
+def get_vacancy_skills(vac_id):
+    try:
+        resp = session.get(f"https://api.hh.ru/vacancies/{vac_id}", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            raw_skills = [s['name'] for s in data.get('key_skills', [])]
+            clean_skills = [skill for skill in raw_skills if skill.lower() not in BANAL_SKILLS]
+            return clean_skills[:5] 
+    except:
+        pass
+    return []
+
 def get_clean_category(cat_raw):
     clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
     return CAT_ALIASES.get(clean, '🌐')
@@ -189,19 +202,29 @@ def filter_and_process(items, rules, is_global=False):
         for f in raw_formats: details.append(f['name'])
 
         details_text = ", ".join(details).lower()
-        has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid'])
+        
+        # Маркеры локации
+        has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid', 'разъездной'])
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
         is_clean_remote = is_remote_explicit and not has_office_marker
-
-        if is_global and has_office_marker: continue
 
         area_id = item.get('area', {}).get('id', '0')
         area_name = item.get('area', {}).get('name', '').lower()
         
-        if not is_clean_remote:
-            if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
-                continue
+        # ✅ ПРОВЕРКА НА СИСТЕМНОГО АНАЛИТИКА
+        is_system_analyst = 'system analyst' in title_lower or 'системный аналитик' in title_lower or 'системный' in title_lower
         
+        if is_system_analyst:
+            # Для СА: Строжайшая удаленка, никаких гибридов и офисов!
+            if not is_remote_explicit or has_office_marker:
+                continue
+        else:
+            # Для остальных аналитиков
+            if is_global and has_office_marker: continue
+            if not is_clean_remote:
+                if area_id in BLACKLISTED_AREAS or 'казахстан' in area_name or 'kazakhstan' in area_name:
+                    continue
+
         emp = item.get('employer', {})
         emp_id = str(emp.get('id', ''))
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
@@ -210,12 +233,6 @@ def filter_and_process(items, rules, is_global=False):
 
         found_skills = extract_skills(item, rules['target_skills'])
         is_ba_title = 'business analyst' in title_lower or 'бизнес-аналитик' in title_lower or 'бизнес аналитик' in title_lower
-        
-        # ✅ SOFT MODE: Для Whitelist снижаем порог входа до 1 скилла
-        min_skills = 1 if is_whitelist else 2
-        
-        if not is_ba_title:
-             if len(found_skills) < min_skills: continue
         
         # --- 💰 ЛОГИКА ЗАРПЛАТ ---
         sal = item.get('salary')
@@ -243,15 +260,26 @@ def filter_and_process(items, rules, is_global=False):
             elif currency: 
                 continue
         
-        if not has_good_salary:
-            # ✅ SOFT MODE: Не отсекаем Whitelist за слабый стек
-            if not is_whitelist:
-                weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
-                if all(skill in weak_stack for skill in found_skills): continue 
+        # ✅ СКИЛЛЫ И ФИЛЬТРАЦИЯ СТЕКА
+        if not is_system_analyst:
+            # Если это обычный аналитик, проверяем хард-скиллы
+            min_skills = 1 if is_whitelist else 2
+            if not is_ba_title:
+                 if len(found_skills) < min_skills: continue
+                 
+            if not has_good_salary:
+                if not is_whitelist:
+                    weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
+                    if all(skill in weak_stack for skill in found_skills): continue 
         
+        # Тянем красивые навыки из API
+        real_skills = get_vacancy_skills(vac_id)
+        if not real_skills and found_skills:
+            real_skills = list(found_skills)[:5]
+        skills_str = ", ".join(real_skills)
+
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
-        skills_str = ", ".join(sorted(found_skills))
 
         fire_marker = ""
         if is_whitelist and is_clean_remote:
@@ -276,8 +304,6 @@ def filter_and_process(items, rules, is_global=False):
 
 def get_smart_sleep_time():
     now = datetime.utcnow() + timedelta(hours=3)
-    
-    # 💤 Fix Monday Morning
     if now.weekday() == 6 and now.hour >= 20:
         target = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0)
         return (target - now).total_seconds(), target
@@ -304,8 +330,8 @@ def get_smart_sleep_time():
 def main_loop():
     init_db()
     init_updates()
-    logging.info("🚀 Analyst Bot v6.3 (Stats Fixed) Started")
-    send_telegram("🟢 <b>Analyst Bot v6.3 Started</b>")
+    logging.info("🚀 Analyst Bot v6.8 (Sys Analyst + Skills) Started")
+    send_telegram("🟢 <b>Analyst Bot v6.8 Started</b>")
     
     while True:
         try:
@@ -318,7 +344,7 @@ def main_loop():
             for i, batch_ids in enumerate(batches):
                 check_remote_stop()
                 found_map = {}
-                per = 3 if i < 10 else 7  # ✅ Увеличил период поиска для Whitelist
+                per = 3 if i < 10 else 7 
                 
                 remote_items = fetch_company_vacancies(batch_ids, schedule="remote", period=per)
                 for item in remote_items: found_map[item['id']] = item
@@ -333,7 +359,7 @@ def main_loop():
             for role, rules in PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()
-                    items = fetch_hh_paginated_global(q, period=3) # ✅ 3 дня для Global (было 1)
+                    items = fetch_hh_paginated_global(q, period=3) 
                     filter_and_process(items, rules, is_global=True)
             
             now = datetime.utcnow() + timedelta(hours=3)
@@ -342,7 +368,6 @@ def main_loop():
             total = sum(stats.values())
             
             if now.hour >= 23:
-                 # ✅ ФИКС СТАТИСТИКИ
                  msg = f"🌙 <b>Итоги Analyst:</b>\nТоп компании: {stats.get('Топ компании',0)}\nОстальные: {stats.get('Остальные',0)}"
                  send_telegram(msg)
 
