@@ -5,7 +5,7 @@ import os
 import time
 import threading
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 # Загрузка env
@@ -78,8 +78,10 @@ def cleanup_logs():
             except Exception as e:
                 print(f"Ошибка очистки лога {log_file}: {e}")
 
+_MOSCOW_TZ = timezone(timedelta(hours=3))
+
 def get_moscow_time():
-    return (datetime.utcnow() + timedelta(hours=3)).strftime("%H:%M:%S")
+    return datetime.now(_MOSCOW_TZ).strftime("%H:%M:%S")
 
 def generate_report():
     report = []
