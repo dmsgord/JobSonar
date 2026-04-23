@@ -18,6 +18,15 @@ SEARCH_PERIOD = 14
 
 PROFILES = {
     'HR': {
+        # Ключевые слова для глобального поиска по HH (search_field=name)
+        'keywords': [
+            'HR Director', 'Директор по персоналу', 'HRD', 'Head of HR',
+            'HRBP', 'HR Business Partner', 'People Partner',
+            'Руководитель отдела персонала', 'Head of Recruitment',
+            'Руководитель подбора', 'Head of Talent', 'HR Generalist',
+            'CPO', 'Chief People Officer', 'Руководитель кадровой службы'
+        ],
+
         # 1. ПРЯМЫЕ ПОПАДАНИЯ (Элита)
         'direct_titles': [
             'HR Director', 'Директор по персоналу', 'HRD', 'Head of HR', 

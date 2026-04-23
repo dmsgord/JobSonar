@@ -34,13 +34,15 @@ def signal_handler(sig, frame):
 
 def send_telegram(token, chat_id, text):
     try:
-        requests.post(
+        r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
             timeout=10
         )
-    except:
-        pass
+        if not r.ok:
+            logging.warning(f"TG send failed: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        logging.warning(f"TG send error: {e}")
 
 def init_updates(token):
     try:
@@ -86,7 +88,7 @@ def get_clean_category(cat_raw):
     clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
     return CAT_ALIASES.get(clean, '🌐')
 
-def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, period=3):
+def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, period=7):
     all_items = []
     page = 0
     params = {"order_by": "publication_time", "per_page": 100, "period": period}
@@ -100,6 +102,9 @@ def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, per
         params["page"] = page
         try:
             resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
+            if resp.status_code != 200:
+                logging.warning(f"HH API company fetch: HTTP {resp.status_code}, page {page}")
+                break
             data = resp.json()
             items = data.get("items", [])
             if not items:
@@ -124,6 +129,9 @@ def fetch_hh_paginated(session, text, period=7, schedule=None):
         params["page"] = page
         try:
             resp = session.get("https://api.hh.ru/vacancies", params=params, timeout=10)
+            if resp.status_code != 200:
+                logging.warning(f"HH API search '{text}': HTTP {resp.status_code}, page {page}")
+                break
             data = resp.json()
             items = data.get("items", [])
             if not items:
