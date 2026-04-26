@@ -245,8 +245,14 @@ def _normalize_vacancy(raw):
     area_name = area_raw.get("name", "")
 
     # Опыт — workExperience: "between3And6" | "noExperience" | ...
+    EXP_MAP = {
+        "noExperience":   "Нет опыта",
+        "between1And3":   "От 1 года до 3 лет",
+        "between3And6":   "От 3 до 6 лет",
+        "moreThan6":      "Более 6 лет",
+    }
     work_exp = raw.get("workExperience", "")
-    experience = {"id": work_exp, "name": work_exp}
+    experience = {"id": work_exp, "name": EXP_MAP.get(work_exp, work_exp)}
 
     # Формат работы — workFormats: [{"workFormatsElement": ["REMOTE"]}]
     wf_list = raw.get("workFormats", [])
@@ -254,7 +260,6 @@ def _normalize_vacancy(raw):
     for wf in wf_list:
         for el in wf.get("workFormatsElement", []):
             work_format_ids.append(el)
-    # Приводим к формату API: [{"id": "remote", "name": "Удалённо"}]
     WF_MAP = {
         "REMOTE": ("remote", "Удалённо"),
         "ON_SITE": ("onSite", "На месте работодателя"),
@@ -267,8 +272,15 @@ def _normalize_vacancy(raw):
         work_format.append({"id": mapped[0], "name": mapped[1]})
 
     # График — @workSchedule: "remote" | "fullDay" | "shift" | ...
+    SCHED_MAP = {
+        "fullDay":    "Полный день",
+        "remote":     "Удалённо",
+        "shift":      "Сменный",
+        "flexible":   "Гибкий",
+        "flyInFlyOut": "Вахта",
+    }
     sched_id = raw.get("@workSchedule", "")
-    schedule = {"id": sched_id, "name": sched_id}
+    schedule = {"id": sched_id, "name": SCHED_MAP.get(sched_id, sched_id)}
 
     # Дата публикации — publicationTime.$
     pub_time = raw.get("publicationTime", {})
