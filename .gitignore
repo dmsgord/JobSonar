@@ -5,6 +5,20 @@
 *.db
 *.log
 jobsonar.db
+log_*.txt
+status_*.txt
+
+# Диагностические и временные файлы
+diag_*.py
+diag_*.txt
+test_*.py
+test_*.bat
+get_token.py
+get_token.bat
+get_token_result.txt
+check_db.py
+test_bot.py
+openapi*.yml
 
 # Виртуальное окружение
 venv/
