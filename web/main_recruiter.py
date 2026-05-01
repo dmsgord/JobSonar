@@ -160,10 +160,6 @@ def process_items(items, rules):
                 elif upper and upper >= threshold:
                     salary_text = f"до {upper} ₽"
                     is_bold_salary = True
-                elif lower:
-                    salary_text = f"от {lower} ₽"
-                elif upper:
-                    salary_text = f"до {upper} ₽"
             elif currency in ['USD', 'EUR']:
                 if lower and upper:
                     salary_text = f"{lower}–{upper} {currency}"
@@ -172,6 +168,10 @@ def process_items(items, rules):
                 elif upper:
                     salary_text = f"до {upper} {currency}"
                 is_bold_salary = True
+
+        if sal and sal.get('currency') == 'RUR' and (sal.get('from') or sal.get('to')) and not is_bold_salary:
+            skipped_salary += 1
+            continue
 
         cat_raw = APPROVED_COMPANIES.get(emp_id, {}).get('cat', 'Остальные')
         cat_emoji = get_clean_category(cat_raw)
