@@ -120,7 +120,7 @@ def filter_and_process(items, rules, is_global=False):
         details_text = ", ".join(details).lower()
 
         has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid', 'разъездной'])
-        is_remote_explicit = 'удален' in details_text or 'remote' in details_text
+        is_remote_explicit = 'удал' in details_text or 'remote' in details_text
         is_clean_remote = is_remote_explicit and not has_office_marker
 
         area_id = item.get('area', {}).get('id', '0')

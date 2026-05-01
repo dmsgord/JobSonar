@@ -125,7 +125,7 @@ def process_items(items, role, rules, is_global=False):
         if any(x in details_text for x in ['гибрид', 'hybrid', 'офис', 'office', 'на месте']):
             skipped_geo += 1
             continue
-        is_remote_explicit = 'удален' in details_text or 'remote' in details_text
+        is_remote_explicit = 'удал' in details_text or 'remote' in details_text
         if not is_remote_explicit:
             skipped_geo += 1
             continue
