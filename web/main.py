@@ -23,6 +23,7 @@ logging.basicConfig(
 )
 
 from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, USER_AGENT, DB_NAME, BANAL_SKILLS
+from config_coo import COO_PROFILES
 from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 from utils import (
     get_moscow_time, signal_handler, smart_contains, get_clean_category,
@@ -38,6 +39,7 @@ try:
 except ImportError:
     APPROVED_COMPANIES = {}
 
+ALL_PROFILES = {**COO_PROFILES, **PROFILES}
 ALL_IDS = list(APPROVED_COMPANIES.keys())
 session = requests.Session()
 from utils import BROWSER_HEADERS
@@ -60,9 +62,6 @@ def send_telegram(text):
 def check_remote_stop():
     global LAST_UPDATE_ID
     LAST_UPDATE_ID = _check_remote_stop(TG_TOKEN, TG_CHAT_ID, BOT_ID, LAST_UPDATE_ID)
-
-def get_vacancy_skills(vac_id):
-    return _get_vacancy_skills(session, vac_id, BANAL_SKILLS)
 
 def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
     return _fetch_company_vacancies(session, employer_ids, area=area, schedule=schedule, period=period)
@@ -92,8 +91,9 @@ def filter_and_process(items, rules, is_global=False):
 
         is_direct_hit = any(smart_contains(title, w) for w in rules['direct_titles'])
         has_role_level = any(smart_contains(title, w) for w in rules['role_levels'])
-        has_hr_context = any(smart_contains(title, w) for w in rules['hr_context'])
-        is_combo_hit = has_role_level and has_hr_context
+        context_words = rules.get('role_context', rules.get('hr_context', []))
+        has_role_context = any(smart_contains(title, w) for w in context_words)
+        is_combo_hit = has_role_level and has_role_context
 
         if not (is_direct_hit or is_combo_hit):
             skipped_title += 1
@@ -130,7 +130,7 @@ def filter_and_process(items, rules, is_global=False):
         sal = item.get('salary')
         salary_text = "-"
         is_bold_salary = False
-        threshold = 250000 if is_global else MIN_SALARY
+        threshold = rules.get('global_min_salary', 250000) if is_global else rules.get('min_salary', MIN_SALARY)
         has_good_salary = False
 
         if sal:
@@ -196,8 +196,8 @@ def main_loop():
     init_db()
     LAST_UPDATE_ID = init_updates(TG_TOKEN)
     last_stats_date = None
-    logging.info("🚀 HR Bot v7.0 Started")
-    send_telegram("🟢 <b>HR Bot v7.0 Started</b>")
+    logging.info("🚀 HR Bot v8.0 Started")
+    send_telegram("🟢 <b>HR Bot v8.0 Started</b>")
 
     while True:
         try:
@@ -218,11 +218,12 @@ def main_loop():
                 area_items = fetch_company_vacancies(batch_ids, area=TARGET_AREAS, period=per)
                 for item in area_items: found_map[item['id']] = item
 
-                filter_and_process(list(found_map.values()), PROFILES['HR'])
+                for _role, _rules in ALL_PROFILES.items():
+                    filter_and_process(list(found_map.values()), _rules)
                 time.sleep(1)
 
             set_status("🔎 Global поиск...")
-            for role, rules in PROFILES.items():
+            for role, rules in ALL_PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()
                     items = fetch_hh_paginated_global(q, period=3)

@@ -18,6 +18,10 @@ SEARCH_PERIOD = 14
 
 PROFILES = {
     'HR': {
+        'name': 'HR',
+        'min_salary': 200000,
+        'global_min_salary': 250000,
+
         # Ключевые слова для глобального поиска по HH (search_field=name)
         'keywords': [
             'HR Director', 'Директор по персоналу', 'HRD', 'Head of HR',
