@@ -158,37 +158,27 @@ def filter_and_process(items, rules, is_global=False):
 
         if sal:
             currency = sal.get('currency')
+            lower = sal.get('from')
+            upper = sal.get('to')
             if currency == 'RUR':
-                lower = sal.get('from')
-                upper = sal.get('to')
                 if lower and lower >= threshold:
                     salary_text = f"от {lower} ₽"
                     is_bold_salary = True
-                    has_good_salary = True
                 elif upper and upper >= threshold:
                     salary_text = f"до {upper} ₽"
                     is_bold_salary = True
-                    has_good_salary = True
-                else:
-                    skipped_salary += 1
-                    continue
-            elif currency:
-                skipped_salary += 1
-                continue
-
-        if not is_system_analyst:
-            min_skills = 1 if is_whitelist else 2
-            if not is_ba_title:
-                if len(found_skills) < min_skills:
-                    skipped_skills += 1
-                    continue
-
-            if not has_good_salary:
-                if not is_whitelist:
-                    weak_stack = {'Jira', 'Confluence', 'Atlassian', 'Джира', 'Конфлюенс'}
-                    if all(skill in weak_stack for skill in found_skills):
-                        skipped_skills += 1
-                        continue
+                elif lower:
+                    salary_text = f"от {lower} ₽"
+                elif upper:
+                    salary_text = f"до {upper} ₽"
+            elif currency in ['USD', 'EUR']:
+                if lower and upper:
+                    salary_text = f"{lower}–{upper} {currency}"
+                elif lower:
+                    salary_text = f"от {lower} {currency}"
+                elif upper:
+                    salary_text = f"до {upper} {currency}"
+                is_bold_salary = True
 
         skills_str = ", ".join(list(found_skills)[:5])
 

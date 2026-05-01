@@ -135,25 +135,27 @@ def filter_and_process(items, rules, is_global=False):
 
         if sal:
             currency = sal.get('currency')
+            lower = sal.get('from')
+            upper = sal.get('to')
             if currency == 'RUR':
-                lower = sal.get('from')
-                upper = sal.get('to')
                 if lower and lower >= threshold:
                     salary_text = f"от {lower} ₽"
                     is_bold_salary = True
-                    has_good_salary = True
                 elif upper and upper >= threshold:
                     salary_text = f"до {upper} ₽"
                     is_bold_salary = True
-                    has_good_salary = True
+                elif lower:
+                    salary_text = f"от {lower} ₽"
+                elif upper:
+                    salary_text = f"до {upper} ₽"
             elif currency in ['USD', 'EUR']:
-                salary_text = f"{sal.get('from', '')} - {sal.get('to', '')} {currency}".replace("None", "").strip("- ")
+                if lower and upper:
+                    salary_text = f"{lower}–{upper} {currency}"
+                elif lower:
+                    salary_text = f"от {lower} {currency}"
+                elif upper:
+                    salary_text = f"до {upper} {currency}"
                 is_bold_salary = True
-                has_good_salary = True
-
-        if sal and not has_good_salary and (sal.get('from') or sal.get('to')) and sal.get('currency') == 'RUR':
-            skipped_salary += 1
-            continue
 
         emp = item.get('employer', {})
         emp_id = str(emp.get('id', ''))
