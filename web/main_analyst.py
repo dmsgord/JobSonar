@@ -26,7 +26,7 @@ from config_analyst import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, BLACKLIST
 from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 from utils import (
     get_moscow_time, signal_handler, smart_contains, get_clean_category,
-    get_smart_sleep_time, get_vacancy_skills as _get_vacancy_skills,
+    get_smart_sleep_time,
     set_status as _set_status, send_telegram as _send_telegram,
     init_updates, check_remote_stop as _check_remote_stop,
     fetch_company_vacancies as _fetch_company_vacancies,
@@ -60,9 +60,6 @@ def send_telegram(text):
 def check_remote_stop():
     global LAST_UPDATE_ID
     LAST_UPDATE_ID = _check_remote_stop(TG_TOKEN, TG_CHAT_ID, BOT_ID, LAST_UPDATE_ID)
-
-def get_vacancy_skills(vac_id):
-    return _get_vacancy_skills(session, vac_id, BANAL_SKILLS)
 
 def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
     return _fetch_company_vacancies(session, employer_ids, area=area, schedule=schedule, period=period)
@@ -193,10 +190,7 @@ def filter_and_process(items, rules, is_global=False):
                         skipped_skills += 1
                         continue
 
-        real_skills = get_vacancy_skills(vac_id)
-        if not real_skills and found_skills:
-            real_skills = list(found_skills)[:5]
-        skills_str = ", ".join(real_skills)
+        skills_str = ", ".join(list(found_skills)[:5])
 
         dt = item.get('published_at', '').split('T')[0]
         pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
@@ -206,11 +200,12 @@ def filter_and_process(items, rules, is_global=False):
             fire_marker = "🔥 "
 
         salary_html = f"<b>{salary_text}</b>" if is_bold_salary else salary_text
+        skills_block = f"🛠 <b>{skills_str}</b>\n" if skills_str else ""
 
         msg = (
             f"{fire_marker}{cat_emoji} <b>{emp.get('name')}</b>\n\n"
             f"<a href='{item['alternate_url']}'><b>{title}</b></a>\n\n"
-            f"🛠 <b>{skills_str}</b>\n"
+            f"{skills_block}"
             f"📌 {', '.join(details)}\n"
             f"💰 {salary_html} | 🗓 {pub_date}"
         )
@@ -221,8 +216,7 @@ def filter_and_process(items, rules, is_global=False):
         processed += 1
         time.sleep(0.5)
 
-    if total > 0:
-        logging.info(f"📊 Analyst batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} salary={skipped_salary} skills={skipped_skills} sent={processed}")
+    logging.info(f"📊 Analyst batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} salary={skipped_salary} skills={skipped_skills} sent={processed}")
     return processed
 
 
@@ -230,8 +224,9 @@ def main_loop():
     global LAST_UPDATE_ID
     init_db()
     LAST_UPDATE_ID = init_updates(TG_TOKEN)
-    logging.info("🚀 Analyst Bot v6.8 Started")
-    send_telegram("🟢 <b>Analyst Bot v6.8 Started</b>")
+    last_stats_date = None
+    logging.info("🚀 Analyst Bot v7.1 Started")
+    send_telegram("🟢 <b>Analyst Bot v7.1 Started</b>")
 
     while True:
         try:
@@ -267,9 +262,11 @@ def main_loop():
             stats = get_daily_stats()
             total = sum(stats.values())
 
-            if now.hour >= 23:
-                msg = f"🌙 <b>Итоги Analyst:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}"
+            today = now.date()
+            if now.hour >= 23 and last_stats_date != today:
+                msg = f"🌙 <b>Итоги Analyst:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}\nВсего: {total}"
                 send_telegram(msg)
+                last_stats_date = today
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
 

@@ -201,8 +201,7 @@ def process_items(items, rules):
         processed += 1
         time.sleep(0.5)
 
-    if total > 0:
-        logging.info(f"📊 Recruiter batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} domain={skipped_domain} salary={skipped_salary} sent={processed}")
+    logging.info(f"📊 Recruiter batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} domain={skipped_domain} salary={skipped_salary} sent={processed}")
     return processed
 
 
@@ -210,8 +209,9 @@ def main_loop():
     global LAST_UPDATE_ID
     init_db()
     LAST_UPDATE_ID = init_updates(TG_TOKEN)
-    logging.info("🚀 Recruiter Bot v6.3 Started")
-    send_telegram("🟢 <b>Recruiter Bot v6.3 Started</b>")
+    last_stats_date = None
+    logging.info("🚀 Recruiter Bot v1.4 Started")
+    send_telegram("🟢 <b>Recruiter Bot v1.4 Started</b>")
 
     while True:
         try:
@@ -230,10 +230,12 @@ def main_loop():
             seconds, next_run = get_smart_sleep_time()
             stats = get_daily_stats()
             total = sum(stats.values())
+            today = now.date()
 
-            if now.hour == 23 and now.minute < 30:
-                msg = f"🌙 <b>Итоги Recruiter:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}"
+            if now.hour >= 23 and last_stats_date != today:
+                msg = f"🌙 <b>Итоги Recruiter:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}\nВсего: {total}"
                 send_telegram(msg)
+                last_stats_date = today
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
 

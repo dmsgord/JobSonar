@@ -79,15 +79,6 @@ def is_individual_person(emp_name):
     if 2 <= len(parts) <= 4 and bool(re.search('[а-я]', name_lower)): return True
     return False
 
-def check_domain_relevance(item, markers, stop_domains):
-    snippet = item.get('snippet', {}) or {}
-    full_text = (item.get('name', '') + ' ' + (snippet.get('requirement') or '')).lower()
-    for stop in stop_domains:
-        if smart_contains(full_text, stop): return False
-    for marker in markers:
-        if smart_contains(full_text, marker): return True
-    return False
-
 
 def process_items(items, role, rules, is_global=False):
     processed = 0
@@ -139,7 +130,9 @@ def process_items(items, role, rules, is_global=False):
             skipped_geo += 1
             continue
 
-        if not check_domain_relevance(item, rules['digital_markers'], rules['stop_domains']):
+        snippet = item.get('snippet', {}) or {}
+        full_text = (item.get('name', '') + ' ' + (snippet.get('requirement') or '')).lower()
+        if any(smart_contains(full_text, stop) for stop in rules['stop_domains']):
             skipped_domain += 1
             continue
 
@@ -197,8 +190,7 @@ def process_items(items, role, rules, is_global=False):
         processed += 1
         time.sleep(0.5)
 
-    if total > 0:
-        logging.info(f"📊 Sales batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} domain={skipped_domain} salary={skipped_salary} sent={processed}")
+    logging.info(f"📊 Sales batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} domain={skipped_domain} salary={skipped_salary} sent={processed}")
     return processed
 
 
@@ -206,8 +198,9 @@ def main_loop():
     global LAST_UPDATE_ID
     init_db()
     LAST_UPDATE_ID = init_updates(TG_TOKEN)
-    logging.info("🚀 Sales Bot v6.3 Started")
-    send_telegram("🟢 <b>Sales Bot v6.3 Started</b>")
+    last_stats_date = None
+    logging.info("🚀 Sales Bot v1.3 Started")
+    send_telegram("🟢 <b>Sales Bot v1.3 Started</b>")
 
     while True:
         try:
@@ -226,10 +219,12 @@ def main_loop():
             seconds, next_run = get_smart_sleep_time()
             stats = get_daily_stats()
             total = sum(stats.values())
+            today = now.date()
 
-            if now.hour >= 23:
-                msg = f"🌙 <b>Итоги Sales:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}"
+            if now.hour >= 23 and last_stats_date != today:
+                msg = f"🌙 <b>Итоги Sales:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}\nВсего: {total}"
                 send_telegram(msg)
+                last_stats_date = today
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
 

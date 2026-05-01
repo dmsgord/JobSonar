@@ -26,7 +26,7 @@ from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, USE
 from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 from utils import (
     get_moscow_time, signal_handler, smart_contains, get_clean_category,
-    get_smart_sleep_time, get_vacancy_skills as _get_vacancy_skills,
+    get_smart_sleep_time,
     set_status as _set_status, send_telegram as _send_telegram,
     init_updates, check_remote_stop as _check_remote_stop,
     fetch_company_vacancies as _fetch_company_vacancies,
@@ -69,6 +69,7 @@ def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
 
 def fetch_hh_paginated_global(text, period=7):
     return fetch_hh_paginated(session, text, period=period)
+
 
 
 def filter_and_process(items, rules, is_global=False):
@@ -115,25 +116,16 @@ def filter_and_process(items, rules, is_global=False):
 
         details_text = ", ".join(details).lower()
 
-        snippet = item.get('snippet', {}) or {}
-        req_text = (snippet.get('requirement') or '') + ' ' + (snippet.get('responsibility') or '')
-        req_text_lower = req_text.lower()
-
-        has_remote_in_text = 'удален' in req_text_lower or 'remote' in req_text_lower
         is_remote_explicit = 'удален' in details_text or 'remote' in details_text
-
-        office_markers = ['офис', 'на месте', 'office', 'гибрид', 'hybrid', 'разъездной']
-        has_office_marker = any(x in details_text for x in office_markers)
+        has_office_marker = any(x in details_text for x in ['офис', 'на месте', 'office', 'гибрид', 'hybrid', 'разъездной'])
 
         area_id = item.get('area', {}).get('id', '0')
+        area_name = item.get('area', {}).get('name', '').lower()
+        is_target_area = area_id in TARGET_AREAS or 'москв' in area_name
 
-        if area_id not in TARGET_AREAS:
-            if not (is_remote_explicit or has_remote_in_text):
-                skipped_geo += 1
-                continue
-
-        real_skills = get_vacancy_skills(vac_id)
-        skills_str = ", ".join(real_skills)
+        if not is_target_area and not is_remote_explicit:
+            skipped_geo += 1
+            continue
 
         sal = item.get('salary')
         salary_text = "-"
@@ -178,12 +170,10 @@ def filter_and_process(items, rules, is_global=False):
             fire_marker = "🔥 "
 
         salary_html = f"<b>{salary_text}</b>" if is_bold_salary else salary_text
-        skills_block = f"🛠 <b>{skills_str}</b>\n" if skills_str else ""
 
         msg = (
             f"{fire_marker}{cat_emoji} <b>{emp.get('name')}</b>\n\n"
             f"<a href='{item['alternate_url']}'><b>{item['name']}</b></a>\n\n"
-            f"{skills_block}"
             f"📌 {', '.join(details)}\n"
             f"🎓 {exp.get('name')}\n"
             f"💰 {salary_html} | 🗓 {pub_date}"
@@ -195,8 +185,7 @@ def filter_and_process(items, rules, is_global=False):
         processed += 1
         time.sleep(0.5)
 
-    if total > 0:
-        logging.info(f"📊 HR batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} salary={skipped_salary} sent={processed}")
+    logging.info(f"📊 HR batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} salary={skipped_salary} sent={processed}")
     return processed
 
 
@@ -204,8 +193,9 @@ def main_loop():
     global LAST_UPDATE_ID
     init_db()
     LAST_UPDATE_ID = init_updates(TG_TOKEN)
-    logging.info("🚀 HR Bot v6.7 Started")
-    send_telegram("🟢 <b>HR Bot v6.7 Started</b>")
+    last_stats_date = None
+    logging.info("🚀 HR Bot v7.0 Started")
+    send_telegram("🟢 <b>HR Bot v7.0 Started</b>")
 
     while True:
         try:
@@ -240,10 +230,12 @@ def main_loop():
             seconds, next_run = get_smart_sleep_time()
             stats = get_daily_stats()
             total = sum(stats.values())
+            today = now.date()
 
-            if now.hour >= 23:
-                msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}"
+            if now.hour >= 23 and last_stats_date != today:
+                msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}\nВсего: {total}"
                 send_telegram(msg)
+                last_stats_date = today
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
 
