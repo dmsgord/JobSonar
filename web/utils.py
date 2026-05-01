@@ -265,6 +265,7 @@ def _normalize_vacancy(raw):
         "ON_SITE": ("onSite", "На месте работодателя"),
         "HYBRID": ("hybrid", "Гибрид"),
         "FIELD": ("field", "Разъездной"),
+        "FIELD_WORK": ("field", "Разъездной"),
     }
     work_format = []
     for wf_id in work_format_ids:
