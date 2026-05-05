@@ -203,6 +203,7 @@ def main_loop():
     global LAST_UPDATE_ID
     init_db()
     LAST_UPDATE_ID = init_updates(TG_TOKEN)
+    last_stats_date = None
     logging.info("🚀 HR Bot v6.7 Started")
     send_telegram("🟢 <b>HR Bot v6.7 Started</b>")
 
@@ -239,10 +240,12 @@ def main_loop():
             seconds, next_run = get_smart_sleep_time()
             stats = get_daily_stats()
             total = sum(stats.values())
+            today = now.date()
 
-            if now.hour >= 23:
-                msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}"
+            if now.hour >= 23 and last_stats_date != today:
+                msg = f"🌙 <b>Итоги HR:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}\nВсего: {total}"
                 send_telegram(msg)
+                last_stats_date = today
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
 
