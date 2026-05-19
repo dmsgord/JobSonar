@@ -6,6 +6,7 @@ import json
 import signal
 import logging
 import random
+import traceback as _traceback
 import requests
 from datetime import datetime, timedelta, timezone
 
@@ -427,8 +428,6 @@ def get_vacancy_skills(session, vac_id, banal_skills):
     return []
 
 
-import traceback as _traceback
-
 
 def report_error(e: Exception, token: str, chat_id: str, context: str = ""):
     tb = _traceback.format_exc()
@@ -436,8 +435,8 @@ def report_error(e: Exception, token: str, chat_id: str, context: str = ""):
     try:
         msg = f"🔥 <b>Ошибка бота{f' ({context})' if context else ''}:</b>\n<code>{str(e)[:300]}</code>"
         send_telegram(token, chat_id, msg)
-    except Exception:
-        pass
+    except Exception as _tg_err:
+        logging.debug(f"report_error: failed to send Telegram notification: {_tg_err}")
 
 
 def get_smart_sleep_time():
