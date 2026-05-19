@@ -439,6 +439,19 @@ def report_error(e: Exception, token: str, chat_id: str, context: str = ""):
         logging.debug(f"report_error: failed to send Telegram notification: {_tg_err}")
 
 
+def send_daily_stats(bot_name: str, token: str, chat_id: str, stats: dict):
+    total = sum(stats.values())
+    top = stats.get('Топ компании', 0)
+    others = stats.get('Остальные', 0)
+    msg = (
+        f"🌙 <b>Итоги {bot_name}:</b>\n"
+        f"Топ компании: {top}\n"
+        f"Остальные: {others}\n"
+        f"Всего: {total}"
+    )
+    send_telegram(token, chat_id, msg)
+
+
 def get_smart_sleep_time():
     now = get_moscow_time()
     if now.weekday() == 6 and now.hour >= 20:

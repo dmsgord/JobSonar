@@ -30,7 +30,7 @@ from utils import (
     set_status as _set_status, send_telegram as _send_telegram,
     init_updates, check_remote_stop as _check_remote_stop,
     fetch_company_vacancies as _fetch_company_vacancies,
-    fetch_hh_paginated, report_error
+    fetch_hh_paginated, report_error, send_daily_stats
 )
 
 try:
@@ -254,8 +254,7 @@ def main_loop():
 
             today = now.date()
             if now.hour >= 23 and last_stats_date != today:
-                msg = f"🌙 <b>Итоги Analyst:</b>\nТоп компании: {stats.get('Топ компании', 0)}\nОстальные: {stats.get('Остальные', 0)}\nВсего: {total}"
-                send_telegram(msg)
+                send_daily_stats("Analyst", TG_TOKEN, TG_CHAT_ID, stats)
                 last_stats_date = today
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За сегодня: {total}")
