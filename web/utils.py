@@ -427,6 +427,19 @@ def get_vacancy_skills(session, vac_id, banal_skills):
     return []
 
 
+import traceback as _traceback
+
+
+def report_error(e: Exception, token: str, chat_id: str, context: str = ""):
+    tb = _traceback.format_exc()
+    logging.error(f"Error{f' in {context}' if context else ''}: {e}\n{tb}")
+    try:
+        msg = f"🔥 <b>Ошибка бота{f' ({context})' if context else ''}:</b>\n<code>{str(e)[:300]}</code>"
+        send_telegram(token, chat_id, msg)
+    except Exception:
+        pass
+
+
 def get_smart_sleep_time():
     now = get_moscow_time()
     if now.weekday() == 6 and now.hour >= 20:

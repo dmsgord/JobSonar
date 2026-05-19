@@ -30,7 +30,7 @@ from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
 from utils import (
     get_moscow_time, signal_handler, smart_contains, get_clean_category,
     set_status as _set_status, send_telegram as _send_telegram,
-    init_updates, check_remote_stop as _check_remote_stop, fetch_hh_paginated
+    init_updates, check_remote_stop as _check_remote_stop, fetch_hh_paginated, report_error
 )
 
 try:
@@ -243,7 +243,7 @@ def main_loop():
                 seconds -= 10
 
         except Exception as e:
-            logging.error(f"Error: {e}")
+            report_error(e, TG_TOKEN, TG_CHAT_ID, context="main_loop")
             time.sleep(60)
 
 

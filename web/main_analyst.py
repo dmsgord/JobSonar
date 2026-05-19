@@ -30,7 +30,7 @@ from utils import (
     set_status as _set_status, send_telegram as _send_telegram,
     init_updates, check_remote_stop as _check_remote_stop,
     fetch_company_vacancies as _fetch_company_vacancies,
-    fetch_hh_paginated
+    fetch_hh_paginated, report_error
 )
 
 try:
@@ -266,7 +266,7 @@ def main_loop():
                 seconds -= 10
 
         except Exception as e:
-            logging.error(f"Error: {e}")
+            report_error(e, TG_TOKEN, TG_CHAT_ID, context="main_loop")
             time.sleep(60)
 
 
