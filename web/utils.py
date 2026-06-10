@@ -452,6 +452,38 @@ def send_daily_stats(bot_name: str, token: str, chat_id: str, stats: dict):
     send_telegram(token, chat_id, msg)
 
 
+class BotContext:
+    def __init__(self, token: str, chat_id: str, status_file: str, db_path: str):
+        from db import set_db_name
+        self.token = token
+        self.chat_id = chat_id
+        self.status_file = status_file
+        self.session = requests.Session()
+        self.session.headers.update(BROWSER_HEADERS)
+        self.last_update_id = 0
+        self.bot_id = token.split(':')[0] if token else "0"
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        set_db_name(db_path)
+
+    def set_status(self, text: str):
+        set_status(self.status_file, text)
+
+    def send_telegram(self, text: str):
+        send_telegram(self.token, self.chat_id, text)
+
+    def check_remote_stop(self):
+        self.last_update_id = check_remote_stop(
+            self.token, self.chat_id, self.bot_id, self.last_update_id
+        )
+
+    def fetch_company_vacancies(self, employer_ids, area=None, schedule=None, period=7):
+        return fetch_company_vacancies(self.session, employer_ids, area=area, schedule=schedule, period=period)
+
+    def fetch_hh_paginated(self, text: str, period: int = 7, schedule=None):
+        return fetch_hh_paginated(self.session, text, period=period, schedule=schedule)
+
+
 def get_smart_sleep_time():
     now = get_moscow_time()
     if now.weekday() == 6 and now.hour >= 20:

@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 import time
-import requests
 import sys
-import signal
 import logging
 import os
 from dotenv import load_dotenv
@@ -24,14 +22,10 @@ logging.basicConfig(
 
 from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, USER_AGENT, DB_NAME, BANAL_SKILLS
 from config_coo import COO_PROFILES
-from db import init_db, is_sent, mark_as_sent, set_db_name, get_daily_stats
+from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
-    get_moscow_time, signal_handler, smart_contains, get_clean_category,
-    get_smart_sleep_time,
-    set_status as _set_status, send_telegram as _send_telegram,
-    init_updates, check_remote_stop as _check_remote_stop,
-    fetch_company_vacancies as _fetch_company_vacancies,
-    fetch_hh_paginated, report_error, send_daily_stats
+    BotContext, get_moscow_time, smart_contains, get_clean_category,
+    get_smart_sleep_time, init_updates, report_error, send_daily_stats
 )
 
 try:
@@ -41,33 +35,25 @@ except ImportError:
 
 ALL_PROFILES = {**COO_PROFILES, **PROFILES}
 ALL_IDS = list(APPROVED_COMPANIES.keys())
-session = requests.Session()
-from utils import BROWSER_HEADERS
-session.headers.update(BROWSER_HEADERS)
 
-set_db_name(os.path.join(BASE_DIR, DB_NAME))
-BOT_ID = TG_TOKEN.split(':')[0] if TG_TOKEN else "0"
-LAST_UPDATE_ID = 0
-
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
+bot = BotContext(TG_TOKEN, TG_CHAT_ID, STATUS_FILE, os.path.join(BASE_DIR, DB_NAME))
+session = bot.session
 
 
 def set_status(text):
-    _set_status(STATUS_FILE, text)
+    bot.set_status(text)
 
 def send_telegram(text):
-    _send_telegram(TG_TOKEN, TG_CHAT_ID, text)
+    bot.send_telegram(text)
 
 def check_remote_stop():
-    global LAST_UPDATE_ID
-    LAST_UPDATE_ID = _check_remote_stop(TG_TOKEN, TG_CHAT_ID, BOT_ID, LAST_UPDATE_ID)
+    bot.check_remote_stop()
 
 def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
-    return _fetch_company_vacancies(session, employer_ids, area=area, schedule=schedule, period=period)
+    return bot.fetch_company_vacancies(employer_ids, area=area, schedule=schedule, period=period)
 
 def fetch_hh_paginated_global(text, period=7):
-    return fetch_hh_paginated(session, text, period=period)
+    return bot.fetch_hh_paginated(text, period=period)
 
 
 
@@ -192,9 +178,8 @@ def filter_and_process(items, rules, is_global=False):
 
 
 def main_loop():
-    global LAST_UPDATE_ID
     init_db()
-    LAST_UPDATE_ID = init_updates(TG_TOKEN)
+    bot.last_update_id = init_updates(TG_TOKEN)
     last_stats_date = None
     logging.info("🚀 HR Bot v8.0 Started")
     send_telegram("🟢 <b>HR Bot v8.0 Started</b>")
