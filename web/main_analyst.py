@@ -20,11 +20,12 @@ logging.basicConfig(
     ]
 )
 
-from config_analyst import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, BLACKLISTED_AREAS, USER_AGENT, DB_NAME, TARGET_AREAS, BANAL_SKILLS
+from config_analyst import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, BLACKLISTED_AREAS, DB_NAME, TARGET_AREAS
 from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
     BotContext, get_moscow_time, smart_contains, get_clean_category,
-    get_smart_sleep_time, init_updates, report_error, send_daily_stats
+    get_smart_sleep_time, init_updates, report_error, send_daily_stats,
+    build_details, format_salary, format_pub_date
 )
 
 try:
@@ -35,7 +36,6 @@ except ImportError:
 ALL_IDS = list(APPROVED_COMPANIES.keys())
 
 bot = BotContext(TG_TOKEN, TG_CHAT_ID, STATUS_FILE, os.path.join(BASE_DIR, DB_NAME))
-session = bot.session
 
 
 def set_status(text):
@@ -69,7 +69,7 @@ def extract_skills(item, target_skills):
 def filter_and_process(items, rules, is_global=False):
     unique_items = list({v['id']: v for v in items}.values())
     total = len(unique_items)
-    skipped_db = skipped_title = skipped_geo = skipped_salary = skipped_skills = processed = 0
+    skipped_db = skipped_title = skipped_geo = skipped_salary = processed = 0
 
     for item in unique_items:
         vac_id = item['id']
@@ -94,16 +94,7 @@ def filter_and_process(items, rules, is_global=False):
             skipped_title += 1
             continue
 
-        details = []
-        raw_schedule = item.get('schedule', {})
-        raw_formats = item.get('work_format', [])
-        if raw_schedule:
-            if raw_schedule.get('name') not in [f['name'] for f in raw_formats]:
-                details.append(raw_schedule.get('name'))
-        for f in raw_formats:
-            details.append(f['name'])
-
-        details_text = ", ".join(details).lower()
+        details, details_text = build_details(item)
 
         has_office_marker = any(x in details_text for x in ['гибрид', 'офис', 'на месте', 'office', 'hybrid', 'разъездной'])
         is_remote_explicit = 'удал' in details_text or 'remote' in details_text
@@ -136,40 +127,14 @@ def filter_and_process(items, rules, is_global=False):
         found_skills = extract_skills(item, rules['target_skills'])
         is_ba_title = 'business analyst' in title_lower or 'бизнес-аналитик' in title_lower or 'бизнес аналитик' in title_lower
 
-        sal = item.get('salary')
-        salary_text = "-"
-        is_bold_salary = False
-        threshold = MIN_SALARY
-        has_good_salary = False
-
-        if sal:
-            currency = sal.get('currency')
-            lower = sal.get('from')
-            upper = sal.get('to')
-            if currency == 'RUR':
-                if lower and lower >= threshold:
-                    salary_text = f"от {lower} ₽"
-                    is_bold_salary = True
-                elif upper and upper >= threshold:
-                    salary_text = f"до {upper} ₽"
-                    is_bold_salary = True
-            elif currency in ['USD', 'EUR']:
-                if lower and upper:
-                    salary_text = f"{lower}–{upper} {currency}"
-                elif lower:
-                    salary_text = f"от {lower} {currency}"
-                elif upper:
-                    salary_text = f"до {upper} {currency}"
-                is_bold_salary = True
-
-        if sal and sal.get('currency') == 'RUR' and (sal.get('from') or sal.get('to')) and not is_bold_salary:
+        salary_text, is_bold_salary, skip_salary = format_salary(item.get('salary'), MIN_SALARY)
+        if skip_salary:
             skipped_salary += 1
             continue
 
         skills_str = ", ".join(list(found_skills)[:5])
 
-        dt = item.get('published_at', '').split('T')[0]
-        pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
+        pub_date = format_pub_date(item)
 
         fire_marker = ""
         if is_whitelist and is_clean_remote:
@@ -192,7 +157,7 @@ def filter_and_process(items, rules, is_global=False):
         processed += 1
         time.sleep(0.5)
 
-    logging.info(f"📊 Analyst batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} salary={skipped_salary} skills={skipped_skills} sent={processed}")
+    logging.info(f"📊 Analyst batch: total={total} db={skipped_db} title={skipped_title} geo={skipped_geo} salary={skipped_salary} sent={processed}")
     return processed
 
 
@@ -223,7 +188,6 @@ def main_loop():
                 for item in area_items: found_map[item['id']] = item
 
                 filter_and_process(list(found_map.values()), PROFILES['Analyst'])
-                time.sleep(1)
 
             set_status("🔎 Global поиск...")
             for role, rules in PROFILES.items():

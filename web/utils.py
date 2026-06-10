@@ -192,9 +192,11 @@ def _extract_state_json(html):
 
 
 def _vacancies_from_state(state):
-    """Достаёт список вакансий из стейта страницы."""
+    """Достаёт список вакансий из стейта страницы. None = структура не распознана."""
     try:
-        vsr = state.get("vacancySearchResult", {})
+        if "vacancySearchResult" not in state:
+            return None
+        vsr = state["vacancySearchResult"]
         # Ищем vacancies в разных возможных местах
         for key in ("vacancies", "items", "results"):
             if key in vsr:
@@ -206,7 +208,7 @@ def _vacancies_from_state(state):
                 return results[key]
     except Exception as e:
         logging.debug(f"_vacancies_from_state error: {e}")
-    return []
+    return None
 
 
 def _normalize_vacancy(raw):
@@ -306,12 +308,58 @@ def _normalize_vacancy(raw):
     }
 
 
+# Анти-бот hh.ru: флагует долгоживущую сессию за частоту/объём запросов → 403 на всё.
+# Свежая сессия с того же IP сразу получает 200 (проверено живыми тестами 2026-06-10).
+_last_request_ts = 0.0
+_next_refresh_allowed = 0.0
+
+
+def _throttle():
+    """Глобальная пауза между ЛЮБЫМИ запросами к hh.ru (1-2с с джиттером)."""
+    global _last_request_ts
+    wait = _last_request_ts + random.uniform(1.0, 2.0) - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    _last_request_ts = time.monotonic()
+
+
+def _refresh_session(session):
+    """Сброс анти-бот куки + прогрев. Не чаще раза в 5 минут (если не помогло — не долбимся)."""
+    global _next_refresh_allowed
+    now = time.monotonic()
+    if now < _next_refresh_allowed:
+        return False
+    _next_refresh_allowed = now + 300
+    logging.info("hh.ru 403: сбрасываю сессию, пауза 20-40с, прогрев заново")
+    session.cookies.clear()
+    time.sleep(random.uniform(20, 40))
+    try:
+        session.get("https://hh.ru/", timeout=15)
+        time.sleep(random.uniform(2, 4))
+        return True
+    except Exception as e:
+        logging.warning(f"session refresh warm-up failed: {e}")
+        return False
+
+
+def _is_blocked(r):
+    """403 или редирект на анти-бот заглушку /vpncheeck (отдаётся с кодом 200)."""
+    return r.status_code == 403 or "vpncheeck" in r.url
+
+
 def _fetch_page(session, params, page=0):
     """Загружает одну страницу поиска hh.ru и возвращает (items, total_pages)."""
     params = dict(params)
     params["page"] = page
     try:
+        _throttle()
         r = session.get(HH_SEARCH_URL, params=params, timeout=15)
+        if _is_blocked(r) and _refresh_session(session):
+            _throttle()
+            r = session.get(HH_SEARCH_URL, params=params, timeout=15)
+        if "vpncheeck" in r.url:
+            logging.warning(f"hh.ru анти-бот заглушка vpncheeck, page={page}")
+            return [], 0
         if r.status_code != 200:
             logging.warning(f"hh.ru page fetch HTTP {r.status_code}, page={page}")
             return [], 0
@@ -365,7 +413,6 @@ def fetch_hh_paginated(session, text, period=7, schedule=None):
         all_items.extend(items)
         if not items or page >= total_pages - 1:
             break
-        time.sleep(random.uniform(0.5, 1.5))
 
     return all_items
 
@@ -394,39 +441,84 @@ def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, per
         all_items.extend(items)
         if not items or page >= total_pages - 1:
             break
-        time.sleep(0.3)
 
     return all_items
 
 
-def get_vacancy_skills(session, vac_id, banal_skills):
-    """Получает навыки из страницы вакансии hh.ru/vacancy/{id}."""
-    try:
-        url = HH_VACANCY_URL.format(vac_id)
-        r = session.get(url, timeout=10)
-        if r.status_code != 200:
-            return []
+def build_details(item):
+    """Собирает форматы работы вакансии: (['Удалённо', ...], 'удалённо, ...')."""
+    details = []
+    raw_schedule = item.get('schedule', {})
+    raw_formats = item.get('work_format', [])
+    if raw_schedule:
+        if raw_schedule.get('name') not in [f['name'] for f in raw_formats]:
+            details.append(raw_schedule.get('name'))
+    for f in raw_formats:
+        details.append(f['name'])
+    return details, ", ".join(details).lower()
 
-        # Пробуем извлечь JSON стейт страницы вакансии
-        state = _extract_state_json(r.text)
-        if state:
-            # Ищем key_skills в стейте
-            vacancy_data = state.get("vacancyView", state.get("vacancy", {}))
-            skills = vacancy_data.get("keySkills", vacancy_data.get("key_skills", []))
-            if skills:
-                names = [s.get("name", "") for s in skills if isinstance(s, dict)]
-                return [s for s in names if s.lower() not in banal_skills][:5]
 
-        # Фолбэк: парсим HTML
-        skill_matches = re.findall(
-            r'data-qa="bloko-tag__text"[^>]*>([^<]+)<', r.text
-        )
-        return [s for s in skill_matches if s.lower() not in banal_skills][:5]
+def format_salary(sal, threshold):
+    """
+    Возвращает (salary_text, is_bold, skip).
+    Семантика (одинакова для всех ботов): зарплата не указана → показываем "-";
+    RUR ниже порога → skip; RUR выше порога и любые USD/EUR → жирным.
+    """
+    if not sal:
+        return "-", False, False
+    currency = sal.get('currency')
+    lower = sal.get('from')
+    upper = sal.get('to')
+    if currency == 'RUR':
+        if lower and lower >= threshold:
+            return f"от {lower} ₽", True, False
+        if upper and upper >= threshold:
+            return f"до {upper} ₽", True, False
+        if lower or upper:
+            return "-", False, True
+        return "-", False, False
+    if currency in ['USD', 'EUR']:
+        if lower and upper:
+            return f"{lower}–{upper} {currency}", True, False
+        if lower:
+            return f"от {lower} {currency}", True, False
+        if upper:
+            return f"до {upper} {currency}", True, False
+    return "-", False, False
 
-    except Exception as e:
-        logging.debug(f"get_vacancy_skills error for {vac_id}: {e}")
-    return []
 
+def format_pub_date(item):
+    """'2026-06-09T...' → '09.06'. Не падает, если дата пустая."""
+    dt = item.get('published_at', '').split('T')[0]
+    parts = dt.split('-')
+    if len(parts) == 3:
+        return f"{parts[2]}.{parts[1]}"
+    return "-"
+
+
+def is_individual_person(emp_name):
+    """Эвристика: работодатель — частное лицо/ИП, а не компания (для Sales/Recruiter)."""
+    name_lower = emp_name.lower().strip()
+    if 'ип ' in name_lower or ' ип' in name_lower or '(ип' in name_lower:
+        return True
+    # Инициалы: "иванов и.и." (одиночная буква с точкой)
+    if re.search(r'(^|\s)[а-яa-z]\.', name_lower):
+        return True
+    parts = re.split(r'[\s-]+', name_lower)
+    for part in parts:
+        if part.endswith(('вич', 'вна', 'оглы', 'кызы')):
+            return True
+    if len(parts) == 1:
+        surname_endings = ('ов', 'ова', 'ев', 'ева', 'ин', 'ина', 'ский', 'ская', 'ая', 'ый')
+        if name_lower.endswith(surname_endings):
+            if not any(s in name_lower for s in ['групп', 'софт', 'tech']):
+                return True
+    corp_whitelist = ['ооо', 'ао', 'пао', 'llc', 'групп', 'софт', 'tech', 'студия', 'agency', 'онлайн', 'бизнес']
+    if any(marker in name_lower for marker in corp_whitelist):
+        return False
+    if 2 <= len(parts) <= 4 and bool(re.search('[а-я]', name_lower)):
+        return True
+    return False
 
 
 def report_error(e: Exception, token: str, chat_id: str, context: str = ""):

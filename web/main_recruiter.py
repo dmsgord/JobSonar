@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import time
-import re
 import sys
 import logging
 import random
@@ -23,11 +22,12 @@ logging.basicConfig(
     ]
 )
 
-from config_recruiter import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, SEARCH_PERIOD, USER_AGENT, DB_NAME
+from config_recruiter import TG_TOKEN, TG_CHAT_ID, PROFILES, MIN_SALARY, SEARCH_PERIOD, DB_NAME
 from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
     BotContext, get_moscow_time, smart_contains, get_clean_category,
-    init_updates, report_error, send_daily_stats
+    init_updates, report_error, send_daily_stats,
+    build_details, format_salary, format_pub_date, is_individual_person
 )
 
 try:
@@ -36,7 +36,6 @@ except ImportError:
     APPROVED_COMPANIES = {}
 
 bot = BotContext(TG_TOKEN, TG_CHAT_ID, STATUS_FILE, os.path.join(BASE_DIR, DB_NAME))
-session = bot.session
 
 
 def set_status(text):
@@ -51,21 +50,6 @@ def check_remote_stop():
 def fetch_hh(text, period=SEARCH_PERIOD):
     return bot.fetch_hh_paginated(text, period=period, schedule="remote")
 
-
-def is_individual_person(emp_name):
-    name_lower = emp_name.lower().strip()
-    if 'ип ' in name_lower or ' ип' in name_lower or '(ип' in name_lower: return True
-    parts = re.split(r'[\s-]+', name_lower)
-    for part in parts:
-        if part.endswith('вич') or part.endswith('вна'): return True
-        if part.endswith('оглы') or part.endswith('кызы'): return True
-    if len(parts) == 1:
-        if name_lower.endswith(('ов', 'ова', 'ев', 'ева', 'ин', 'ина')):
-            if not any(s in name_lower for s in ['групп', 'софт']): return True
-    corp_whitelist = ['ооо', 'ао', 'пао', 'llc', 'групп', 'софт', 'tech', 'студия', 'agency', 'онлайн', 'бизнес']
-    if any(marker in name_lower for marker in corp_whitelist): return False
-    if 2 <= len(parts) <= 4 and bool(re.search('[а-я]', name_lower)): return True
-    return False
 
 def get_smart_sleep_time():
     now = get_moscow_time()
@@ -111,15 +95,7 @@ def process_items(items, rules):
             continue
         spam_deduplication_cache.add(spam_signature)
 
-        details = []
-        raw_schedule = item.get('schedule', {})
-        raw_formats = item.get('work_format', [])
-        if raw_schedule:
-            if raw_schedule.get('name') not in [f['name'] for f in raw_formats]:
-                details.append(raw_schedule.get('name'))
-        for f in raw_formats:
-            details.append(f['name'])
-        details_text = ", ".join(details).lower()
+        details, details_text = build_details(item)
 
         if any(x in details_text for x in ['гибрид', 'hybrid', 'офис', 'office', 'на месте']):
             skipped_geo += 1
@@ -131,33 +107,8 @@ def process_items(items, rules):
             skipped_domain += 1
             continue
 
-        sal = item.get('salary')
-        salary_text = "-"
-        is_bold_salary = False
-        threshold = MIN_SALARY
-        has_good_salary = False
-
-        if sal:
-            currency = sal.get('currency')
-            lower = sal.get('from')
-            upper = sal.get('to')
-            if currency == 'RUR':
-                if lower and lower >= threshold:
-                    salary_text = f"от {lower} ₽"
-                    is_bold_salary = True
-                elif upper and upper >= threshold:
-                    salary_text = f"до {upper} ₽"
-                    is_bold_salary = True
-            elif currency in ['USD', 'EUR']:
-                if lower and upper:
-                    salary_text = f"{lower}–{upper} {currency}"
-                elif lower:
-                    salary_text = f"от {lower} {currency}"
-                elif upper:
-                    salary_text = f"до {upper} {currency}"
-                is_bold_salary = True
-
-        if sal and sal.get('currency') == 'RUR' and (sal.get('from') or sal.get('to')) and not is_bold_salary:
+        salary_text, is_bold_salary, skip_salary = format_salary(item.get('salary'), MIN_SALARY)
+        if skip_salary:
             skipped_salary += 1
             continue
 
@@ -165,8 +116,7 @@ def process_items(items, rules):
         cat_emoji = get_clean_category(cat_raw)
         is_whitelist = emp_id in APPROVED_COMPANIES
 
-        dt = item.get('published_at', '').split('T')[0]
-        pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
+        pub_date = format_pub_date(item)
 
         fire_marker = ""
         if is_whitelist:

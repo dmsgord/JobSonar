@@ -20,12 +20,13 @@ logging.basicConfig(
     ]
 )
 
-from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, USER_AGENT, DB_NAME, BANAL_SKILLS
+from config import TG_TOKEN, TG_CHAT_ID, PROFILES, TARGET_AREAS, MIN_SALARY, DB_NAME
 from config_coo import COO_PROFILES
 from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
     BotContext, get_moscow_time, smart_contains, get_clean_category,
-    get_smart_sleep_time, init_updates, report_error, send_daily_stats
+    get_smart_sleep_time, init_updates, report_error, send_daily_stats,
+    build_details, format_salary, format_pub_date
 )
 
 try:
@@ -37,7 +38,6 @@ ALL_PROFILES = {**COO_PROFILES, **PROFILES}
 ALL_IDS = list(APPROVED_COMPANIES.keys())
 
 bot = BotContext(TG_TOKEN, TG_CHAT_ID, STATUS_FILE, os.path.join(BASE_DIR, DB_NAME))
-session = bot.session
 
 
 def set_status(text):
@@ -90,17 +90,7 @@ def filter_and_process(items, rules, is_global=False):
             skipped_title += 1
             continue
 
-        details = []
-        raw_schedule = item.get('schedule', {})
-        raw_formats = item.get('work_format', [])
-
-        if raw_schedule:
-            if raw_schedule.get('name') not in [f['name'] for f in raw_formats]:
-                details.append(raw_schedule.get('name'))
-        for f in raw_formats:
-            details.append(f['name'])
-
-        details_text = ", ".join(details).lower()
+        details, details_text = build_details(item)
 
         is_remote_explicit = 'удал' in details_text or 'remote' in details_text
         has_office_marker = any(x in details_text for x in ['офис', 'на месте', 'office', 'гибрид', 'hybrid', 'разъездной'])
@@ -113,33 +103,9 @@ def filter_and_process(items, rules, is_global=False):
             skipped_geo += 1
             continue
 
-        sal = item.get('salary')
-        salary_text = "-"
-        is_bold_salary = False
         threshold = rules.get('global_min_salary', 250000) if is_global else rules.get('min_salary', MIN_SALARY)
-        has_good_salary = False
-
-        if sal:
-            currency = sal.get('currency')
-            lower = sal.get('from')
-            upper = sal.get('to')
-            if currency == 'RUR':
-                if lower and lower >= threshold:
-                    salary_text = f"от {lower} ₽"
-                    is_bold_salary = True
-                elif upper and upper >= threshold:
-                    salary_text = f"до {upper} ₽"
-                    is_bold_salary = True
-            elif currency in ['USD', 'EUR']:
-                if lower and upper:
-                    salary_text = f"{lower}–{upper} {currency}"
-                elif lower:
-                    salary_text = f"от {lower} {currency}"
-                elif upper:
-                    salary_text = f"до {upper} {currency}"
-                is_bold_salary = True
-
-        if sal and sal.get('currency') == 'RUR' and (sal.get('from') or sal.get('to')) and not is_bold_salary:
+        salary_text, is_bold_salary, skip_salary = format_salary(item.get('salary'), threshold)
+        if skip_salary:
             skipped_salary += 1
             continue
 
@@ -150,8 +116,7 @@ def filter_and_process(items, rules, is_global=False):
         cat_emoji = get_clean_category(cat_raw)
         is_whitelist = emp_id in APPROVED_COMPANIES
 
-        dt = item.get('published_at', '').split('T')[0]
-        pub_date = f"{dt.split('-')[2]}.{dt.split('-')[1]}"
+        pub_date = format_pub_date(item)
 
         fire_marker = ""
         if is_whitelist and is_remote_explicit and not has_office_marker:
@@ -205,7 +170,6 @@ def main_loop():
 
                 for _role, _rules in ALL_PROFILES.items():
                     filter_and_process(list(found_map.values()), _rules)
-                time.sleep(1)
 
             set_status("🔎 Global поиск...")
             for role, rules in ALL_PROFILES.items():
