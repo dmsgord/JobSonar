@@ -672,6 +672,46 @@ def fetch_rabota(keyword, period=14):
     return items
 
 
+def _rabota_clean(x):
+    if not x:
+        return None
+    x = x.replace("\\u002F", "/").replace("\\/", "/")
+    x = re.split(r'[<"\\]', x)[0]
+    x = re.sub(r'\s+', ' ', x).strip(" :,.;")
+    return x[:45] or None
+
+
+def fetch_rabota_details(url):
+    """Дотягивает (график, опыт) со страницы вакансии rabota.ru. Best-effort → (None, None)."""
+    if not url:
+        return None, None
+    try:
+        s = _get_rabota_session()
+        time.sleep(0.6)
+        r = s.get(url, timeout=(8, 15))
+        if r.status_code != 200:
+            return None, None
+        d = r.text
+    except Exception as e:
+        logging.debug(f"rabota details error: {e}")
+        return None, None
+
+    # Опыт: структурный блок "опыт работы X, образование Y" (надёжно)
+    exp = None
+    m = re.search(r'[Оо]пыт работы\s+([^<",]{2,35}?),?\s*образовани', d)
+    if not m:
+        m = re.search(r'[Оо]пыт работы\s+(от[^<",]{2,25}|[Бб]ез опыта)', d)
+    if m:
+        exp = _rabota_clean(m.group(1))
+
+    # График: где указан явно
+    sched = None
+    m = re.search(r'график работы[:\s]+([^<"]{2,40})', d)
+    if m:
+        sched = _rabota_clean(m.group(1))
+    return sched, exp
+
+
 def build_details(item):
     """Собирает форматы работы вакансии: (['Удалённо', ...], 'удалённо, ...')."""
     details = []

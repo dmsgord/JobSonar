@@ -36,7 +36,8 @@ from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
     BotContext, get_moscow_time, smart_contains,
     get_smart_sleep_time, init_updates, report_error, send_daily_stats,
-    build_details, format_salary, format_pub_date, fetch_rabota, reset_rabota_breaker
+    build_details, format_salary, format_pub_date, fetch_rabota, reset_rabota_breaker,
+    fetch_rabota_details
 )
 
 # Шильдики источника (верхняя строка сообщения)
@@ -130,6 +131,15 @@ def filter_and_process(items, profile_name, rules, source="hh"):
         if not is_target_geo(item):
             skipped_geo += 1
             continue
+
+        # Работа.ру: график и опыт есть только на странице вакансии — дотягиваем их
+        # (только для прошедших фильтр, чтобы не дёргать лишнего).
+        if source == 'rb':
+            sched, exp_txt = fetch_rabota_details(item.get('alternate_url'))
+            if sched:
+                item['schedule'] = {'id': '', 'name': sched}
+            if exp_txt:
+                item['experience'] = {'id': '', 'name': exp_txt}
 
         exp = item.get('experience', {})
         if rules.get('skip_no_experience') and exp.get('id') == 'noExperience':
