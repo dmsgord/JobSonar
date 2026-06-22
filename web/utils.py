@@ -461,6 +461,19 @@ def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, per
     return all_items
 
 
+def fetch_hh_search(session, params, max_pages=1):
+    """Гибкий поиск hh.ru по произвольному набору параметров (professional_role, OR-text и т.д.)."""
+    base = {"order_by": "publication_time", "per_page": 20}
+    base.update(params)
+    all_items = []
+    for page in range(max(1, max_pages)):
+        items, total_pages = _fetch_page(session, base, page)
+        all_items.extend(items)
+        if not items or page >= total_pages - 1:
+            break
+    return all_items
+
+
 # ─────────────────────────────────────────────
 #  Хабр Карьера — keyless JSON-фид фронта (без ключа/регистрации). Только для NN-бота.
 # ─────────────────────────────────────────────
@@ -841,6 +854,9 @@ class BotContext:
 
     def fetch_hh_paginated(self, text: str, period: int = 7, schedule=None, area=None, max_pages=1):
         return fetch_hh_paginated(self.session, text, period=period, schedule=schedule, area=area, max_pages=max_pages)
+
+    def fetch_hh_search(self, params, max_pages=1):
+        return fetch_hh_search(self.session, params, max_pages=max_pages)
 
 
 def get_smart_sleep_time():
