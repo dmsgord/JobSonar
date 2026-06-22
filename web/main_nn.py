@@ -30,7 +30,7 @@ logging.basicConfig(
 
 from config_nn import (
     TG_TOKEN, TG_CHAT_ID, PROFILES, DB_NAME, TARGET_AREAS, AREA_NAME_MARKERS,
-    SEARCH_PERIOD
+    SEARCH_PERIOD, RABOTA_PERIOD
 )
 from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
@@ -205,7 +205,7 @@ def main_loop():
             for profile_name, rules in PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()
-                    rb_items = fetch_rabota(q, period=SEARCH_PERIOD)
+                    rb_items = fetch_rabota(q, period=RABOTA_PERIOD)
                     filter_and_process(rb_items, profile_name, rules, source="rb")
 
             now = get_moscow_time()
