@@ -460,6 +460,95 @@ def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, per
     return all_items
 
 
+# ─────────────────────────────────────────────
+#  SuperJob — официальный API (X-Api-App-Id). Только для NN-бота.
+# ─────────────────────────────────────────────
+
+SUPERJOB_API_URL = "https://api.superjob.ru/2.0/vacancies/"
+
+
+def _normalize_superjob(raw):
+    """Вакансия SuperJob → наш стандартный словарь (как _normalize_vacancy для hh)."""
+    vac_id = str(raw.get("id", ""))
+    name = raw.get("profession", "") or ""
+    url = raw.get("link") or f"https://www.superjob.ru/vakansii/{vac_id}.html"
+
+    pf = raw.get("payment_from") or None   # 0 у SuperJob = «не указано»
+    pt = raw.get("payment_to") or None
+    cur = (raw.get("currency") or "rub").upper()
+    cur = {"RUB": "RUR"}.get(cur, cur)     # унифицируем под наш формат
+    salary = {"from": pf, "to": pt, "currency": cur} if (pf or pt) else None
+
+    town = raw.get("town") or {}
+    area = {"id": str(town.get("id", "")), "name": town.get("title", "")}
+
+    exp = raw.get("experience") or {}
+    experience = {"id": "", "name": exp.get("title", "")}
+
+    schedule = {"id": "", "name": (raw.get("type_of_work") or {}).get("title", "")}
+    work_format = []
+    place = (raw.get("place_of_work") or {}).get("title", "")
+    if place:
+        work_format.append({"id": "", "name": place})
+
+    ts = raw.get("date_published")
+    published_at = ""
+    if ts:
+        try:
+            published_at = datetime.fromtimestamp(int(ts), MOSCOW_TZ).strftime("%Y-%m-%dT%H:%M:%S")
+        except (ValueError, OverflowError, OSError):
+            published_at = ""
+
+    return {
+        "id": vac_id,
+        "name": name,
+        "alternate_url": url,
+        "employer": {"id": str((raw.get("client") or {}).get("id", "")), "name": raw.get("firm_name", "") or ""},
+        "salary": salary,
+        "area": area,
+        "schedule": schedule,
+        "work_format": work_format,
+        "experience": experience,
+        "snippet": {"requirement": "", "responsibility": ""},
+        "published_at": published_at,
+    }
+
+
+def fetch_superjob(key, keyword, town_ids, period=3, max_pages=5):
+    """Поиск вакансий через официальный API SuperJob. Пустой ключ → []."""
+    if not key:
+        return []
+    date_from = int(time.time()) - period * 86400
+    headers = {"X-Api-App-Id": key, "User-Agent": BROWSER_HEADERS["User-Agent"]}
+
+    all_items = []
+    for page in range(max(1, max_pages)):
+        params = [
+            ("keyword", keyword),
+            ("order_field", "date"),
+            ("order_direction", "desc"),
+            ("date_published_from", date_from),
+            ("count", 100),
+            ("page", page),
+        ]
+        for t in town_ids:
+            params.append(("t", int(t)))
+        try:
+            r = requests.get(SUPERJOB_API_URL, params=params, headers=headers, timeout=15)
+            if r.status_code != 200:
+                logging.warning(f"SuperJob HTTP {r.status_code}: {r.text[:150]}")
+                break
+            data = r.json()
+            all_items.extend(_normalize_superjob(o) for o in data.get("objects", []))
+            if not data.get("more"):
+                break
+            time.sleep(0.4)
+        except Exception as e:
+            logging.warning(f"SuperJob fetch error (page={page}): {e}")
+            break
+    return all_items
+
+
 def build_details(item):
     """Собирает форматы работы вакансии: (['Удалённо', ...], 'удалённо, ...')."""
     details = []
