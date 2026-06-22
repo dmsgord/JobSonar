@@ -36,7 +36,7 @@ from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
     BotContext, get_moscow_time, smart_contains,
     get_smart_sleep_time, init_updates, report_error, send_daily_stats,
-    build_details, format_salary, format_pub_date, fetch_rabota
+    build_details, format_salary, format_pub_date, fetch_rabota, reset_rabota_breaker
 )
 
 # Шильдики источника (верхняя строка сообщения)
@@ -202,6 +202,7 @@ def main_loop():
             # Источник 2: Работа.ру (общий сайт) — оба профиля, поиск по ключевикам.
             # nn-поддомен = НН и область; гео-отсев до НН/Дзержинска — в is_target_geo.
             set_status("🔎 Работа.ру (Н.Новгород/Дзержинск)...")
+            reset_rabota_breaker()
             for profile_name, rules in PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()

@@ -591,16 +591,56 @@ def _normalize_rabota(jp):
     }
 
 
-def fetch_rabota(keyword, period=3):
+# rabota.ru блокирует датацентр-IP при бёрсте запросов (TCP-таймаут). Поэтому:
+# переиспользуемая сессия + прогрев, троттл между запросами и circuit breaker —
+# после серии таймаутов перестаём долбить до следующего цикла.
+_rabota_session = None
+_rabota_fail_streak = 0
+_rabota_last_ts = 0.0
+_RABOTA_MIN_GAP = 3.0
+_RABOTA_MAX_FAILS = 3
+
+
+def reset_rabota_breaker():
+    """Сброс счётчика отказов rabota.ru — вызывать в начале каждого цикла бота."""
+    global _rabota_fail_streak
+    _rabota_fail_streak = 0
+
+
+def _get_rabota_session():
+    global _rabota_session
+    if _rabota_session is None:
+        s = requests.Session()
+        s.headers.update(BROWSER_HEADERS)
+        s.headers["Accept-Language"] = "ru-RU,ru;q=0.9"
+        try:
+            s.get("https://nn.rabota.ru/", timeout=(8, 15))  # прогрев: куки
+        except Exception:
+            pass
+        _rabota_session = s
+    return _rabota_session
+
+
+def fetch_rabota(keyword, period=14):
     """Свежие вакансии rabota.ru (НН и область) по ключевику из JSON-LD JobPosting."""
-    headers = dict(BROWSER_HEADERS)
-    headers["Accept-Language"] = "ru-RU,ru;q=0.9"
+    global _rabota_fail_streak, _rabota_last_ts
+    if _rabota_fail_streak >= _RABOTA_MAX_FAILS:
+        return []  # circuit breaker: rabota недоступна в этом цикле, не долбим
+
+    gap = _rabota_last_ts + _RABOTA_MIN_GAP - time.monotonic()
+    if gap > 0:
+        time.sleep(gap)
+    _rabota_last_ts = time.monotonic()
+
     cutoff = (get_moscow_time() - timedelta(days=period)).date()
     try:
-        r = requests.get(RABOTA_SEARCH_URL, params={"query": keyword}, headers=headers, timeout=20)
+        s = _get_rabota_session()
+        r = s.get(RABOTA_SEARCH_URL, params={"query": keyword}, timeout=(8, 15))
         if r.status_code != 200:
             logging.warning(f"rabota.ru HTTP {r.status_code} (q={keyword})")
+            _rabota_fail_streak += 1
             return []
+        _rabota_fail_streak = 0
         m = re.search(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', r.text, re.S)
         if not m:
             return []
@@ -608,7 +648,8 @@ def fetch_rabota(keyword, period=3):
         jps = [x for x in (arr if isinstance(arr, list) else [arr])
                if isinstance(x, dict) and x.get("@type") == "JobPosting"]
     except Exception as e:
-        logging.warning(f"rabota.ru fetch error (q={keyword}): {e}")
+        _rabota_fail_streak += 1
+        logging.warning(f"rabota.ru fetch error (q={keyword}): {str(e)[:120]}")
         return []
 
     items = []
