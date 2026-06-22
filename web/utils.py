@@ -376,9 +376,18 @@ def _fetch_page(session, params, page=0):
 
         items = [_normalize_vacancy(v) for v in raw_items]
 
-        # Пагинация — ищем общее число страниц в стейте
+        # Пагинация — реальное число страниц лежит в paging.lastPage / paging.pages.
+        # (Старый код искал totalPages/pages на верхнем уровне — их там нет → всегда 1.)
         vsr = state.get("vacancySearchResult", {})
-        total_pages = vsr.get("totalPages", vsr.get("pages", 1))
+        total_pages = 1
+        paging = vsr.get("paging") or {}
+        last = paging.get("lastPage")
+        if isinstance(last, dict) and last.get("page") is not None:
+            total_pages = int(last["page"]) + 1
+        else:
+            pages_list = paging.get("pages") or []
+            if pages_list:
+                total_pages = max(int(p.get("page", 0)) for p in pages_list) + 1
 
         return items, int(total_pages)
 
@@ -391,8 +400,12 @@ def _fetch_page(session, params, page=0):
 #  Публичные функции (те же сигнатуры что в старом utils.py)
 # ─────────────────────────────────────────────
 
-def fetch_hh_paginated(session, text, period=7, schedule=None):
-    """Поиск вакансий по ключевому слову через hh.ru (замена api.hh.ru)."""
+def fetch_hh_paginated(session, text, period=7, schedule=None, area=None, max_pages=1):
+    """Поиск вакансий по ключевому слову через hh.ru (замена api.hh.ru).
+
+    max_pages — сколько страниц читать максимум (по умолчанию 1: одна страница ≈ 50
+    свежих вакансий). NN-бот передаёт больше; остальные боты сохраняют прежнее поведение.
+    """
     params = {
         "text": text,
         "search_field": "name",
@@ -401,6 +414,8 @@ def fetch_hh_paginated(session, text, period=7, schedule=None):
     }
     if period:
         params["period"] = period
+    if area:
+        params["area"] = area
     # Новый параметр вместо deprecated schedule=remote
     if schedule == "remote":
         params["work_format"] = "remote"
@@ -408,7 +423,7 @@ def fetch_hh_paginated(session, text, period=7, schedule=None):
         params["schedule"] = schedule
 
     all_items = []
-    for page in range(10):
+    for page in range(max(1, max_pages)):
         items, total_pages = _fetch_page(session, params, page)
         all_items.extend(items)
         if not items or page >= total_pages - 1:
@@ -417,7 +432,7 @@ def fetch_hh_paginated(session, text, period=7, schedule=None):
     return all_items
 
 
-def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, period=7):
+def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, period=7, max_pages=1):
     """Поиск вакансий по списку employer_id через hh.ru."""
     params = {
         "order_by": "publication_time",
@@ -436,7 +451,7 @@ def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, per
         params["schedule"] = schedule
 
     all_items = []
-    for page in range(10):
+    for page in range(max(1, max_pages)):
         items, total_pages = _fetch_page(session, params, page)
         all_items.extend(items)
         if not items or page >= total_pages - 1:
@@ -569,11 +584,11 @@ class BotContext:
             self.token, self.chat_id, self.bot_id, self.last_update_id
         )
 
-    def fetch_company_vacancies(self, employer_ids, area=None, schedule=None, period=7):
-        return fetch_company_vacancies(self.session, employer_ids, area=area, schedule=schedule, period=period)
+    def fetch_company_vacancies(self, employer_ids, area=None, schedule=None, period=7, max_pages=1):
+        return fetch_company_vacancies(self.session, employer_ids, area=area, schedule=schedule, period=period, max_pages=max_pages)
 
-    def fetch_hh_paginated(self, text: str, period: int = 7, schedule=None):
-        return fetch_hh_paginated(self.session, text, period=period, schedule=schedule)
+    def fetch_hh_paginated(self, text: str, period: int = 7, schedule=None, area=None, max_pages=1):
+        return fetch_hh_paginated(self.session, text, period=period, schedule=schedule, area=area, max_pages=max_pages)
 
 
 def get_smart_sleep_time():

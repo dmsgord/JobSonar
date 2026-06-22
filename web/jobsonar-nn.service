@@ -1,0 +1,16 @@
+[Unit]
+Description=JobSonar NN Combined Bot (HR + Analyst, Nizhny Novgorod / Dzerzhinsk)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/JobSonar/web
+ExecStart=/usr/bin/python3 -u main_nn.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/JobSonar/web/log_nn_systemd.txt
+StandardError=append:/root/JobSonar/web/log_nn_systemd.txt
+
+[Install]
+WantedBy=multi-user.target
