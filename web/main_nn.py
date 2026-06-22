@@ -30,17 +30,17 @@ logging.basicConfig(
 
 from config_nn import (
     TG_TOKEN, TG_CHAT_ID, PROFILES, DB_NAME, TARGET_AREAS, AREA_NAME_MARKERS,
-    SEARCH_PERIOD, SUPERJOB_KEY, SUPERJOB_TOWNS
+    SEARCH_PERIOD
 )
 from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
     BotContext, get_moscow_time, smart_contains,
     get_smart_sleep_time, init_updates, report_error, send_daily_stats,
-    build_details, format_salary, format_pub_date, fetch_superjob
+    build_details, format_salary, format_pub_date, fetch_rabota
 )
 
 # Шильдики источника (верхняя строка сообщения)
-SOURCE_BADGE = {"hh": "🟦 hh.ru", "sj": "🟧 SuperJob"}
+SOURCE_BADGE = {"hh": "🟦 hh.ru", "rb": "🟥 Работа.ру"}
 ROLE_LABEL = {"HR": "👔 HR", "Analyst": "📊 Аналитик"}
 
 bot = BotContext(TG_TOKEN, TG_CHAT_ID, STATUS_FILE, os.path.join(BASE_DIR, DB_NAME))
@@ -162,7 +162,7 @@ def filter_and_process(items, profile_name, rules, source="hh"):
             f"📍 {area_name}\n\n"
             f"<a href='{item['alternate_url']}'><b>{title}</b></a>\n\n"
             f"{skills_block}"
-            f"📌 {', '.join(details) if details else '—'}\n"
+            f"📌 {', '.join(d for d in details if d) or '—'}\n"
             f"🎓 {exp.get('name') or '—'}\n"
             f"💰 {salary_html} | 🗓 {pub_date}"
         )
@@ -184,26 +184,29 @@ def main_loop():
     init_db()
     bot.last_update_id = init_updates(TG_TOKEN)
     last_stats_date = None
-    sources = "hh.ru + SuperJob" if SUPERJOB_KEY else "hh.ru (SuperJob выкл — нет ключа)"
-    logging.info(f"🚀 NN Combined Bot v1.1 Started | источники: {sources}")
-    send_telegram(f"🟢 <b>NN Bot v1.1 Started</b> (HR + Аналитик, Н.Новгород/Дзержинск)\nИсточники: {sources}")
+    logging.info("🚀 NN Combined Bot v1.2 Started | источники: hh.ru + Работа.ру")
+    send_telegram("🟢 <b>NN Bot v1.2 Started</b> (HR + Аналитик, Н.Новгород/Дзержинск)\nИсточники: hh.ru + Работа.ру")
 
     while True:
         try:
             check_remote_stop()
             set_status("🔎 Поиск по Н.Новгороду/Дзержинску...")
 
-            # Поиск по ключевикам обоих профилей в двух источниках.
+            # Источник 1: hh.ru — поиск по ключевикам обоих профилей (area-фильтр на стороне hh)
             for profile_name, rules in PROFILES.items():
                 for q in rules["keywords"]:
                     check_remote_stop()
-                    # Источник 1: hh.ru (area-фильтр на стороне hh)
                     hh_items = bot.fetch_hh_paginated(q, period=SEARCH_PERIOD, area=TARGET_AREAS, max_pages=5)
                     filter_and_process(hh_items, profile_name, rules, source="hh")
-                    # Источник 2: SuperJob (только если есть ключ; town-фильтр на стороне SJ)
-                    if SUPERJOB_KEY:
-                        sj_items = fetch_superjob(SUPERJOB_KEY, q, SUPERJOB_TOWNS, period=SEARCH_PERIOD)
-                        filter_and_process(sj_items, profile_name, rules, source="sj")
+
+            # Источник 2: Работа.ру (общий сайт) — оба профиля, поиск по ключевикам.
+            # nn-поддомен = НН и область; гео-отсев до НН/Дзержинска — в is_target_geo.
+            set_status("🔎 Работа.ру (Н.Новгород/Дзержинск)...")
+            for profile_name, rules in PROFILES.items():
+                for q in rules["keywords"]:
+                    check_remote_stop()
+                    rb_items = fetch_rabota(q, period=SEARCH_PERIOD)
+                    filter_and_process(rb_items, profile_name, rules, source="rb")
 
             now = get_moscow_time()
             seconds, next_run = get_smart_sleep_time()

@@ -461,92 +461,168 @@ def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, per
 
 
 # ─────────────────────────────────────────────
-#  SuperJob — официальный API (X-Api-App-Id). Только для NN-бота.
+#  Хабр Карьера — keyless JSON-фид фронта (без ключа/регистрации). Только для NN-бота.
 # ─────────────────────────────────────────────
 
-SUPERJOB_API_URL = "https://api.superjob.ru/2.0/vacancies/"
+HABR_VAC_API = "https://career.habr.com/api/frontend/vacancies"
 
 
-def _normalize_superjob(raw):
-    """Вакансия SuperJob → наш стандартный словарь (как _normalize_vacancy для hh)."""
+def _normalize_habr(raw, area_name=""):
+    """Вакансия Хабр Карьеры → наш стандартный словарь (как _normalize_vacancy для hh)."""
     vac_id = str(raw.get("id", ""))
-    name = raw.get("profession", "") or ""
-    url = raw.get("link") or f"https://www.superjob.ru/vakansii/{vac_id}.html"
+    name = raw.get("title", "") or ""
+    href = raw.get("href", "") or ""
+    url = f"https://career.habr.com{href}" if href.startswith("/") else (href or f"https://career.habr.com/vacancies/{vac_id}")
 
-    pf = raw.get("payment_from") or None   # 0 у SuperJob = «не указано»
-    pt = raw.get("payment_to") or None
-    cur = (raw.get("currency") or "rub").upper()
-    cur = {"RUB": "RUR"}.get(cur, cur)     # унифицируем под наш формат
-    salary = {"from": pf, "to": pt, "currency": cur} if (pf or pt) else None
+    comp = raw.get("company") or {}
+    sal = raw.get("salary") or {}
+    sfrom, sto = sal.get("from"), sal.get("to")
+    cur = sal.get("currency") or "RUR"
+    cur = {"rub": "RUR", "RUB": "RUR", "rur": "RUR"}.get(cur, str(cur).upper())
+    salary = {"from": sfrom, "to": sto, "currency": cur} if (sfrom or sto) else None
 
-    town = raw.get("town") or {}
-    area = {"id": str(town.get("id", "")), "name": town.get("title", "")}
+    pub = raw.get("publishedDate") or {}
+    published_at = pub.get("date", "") if isinstance(pub, dict) else ""
 
-    exp = raw.get("experience") or {}
-    experience = {"id": "", "name": exp.get("title", "")}
-
-    schedule = {"id": "", "name": (raw.get("type_of_work") or {}).get("title", "")}
+    EMP_MAP = {"full_time": "Полный день", "part_time": "Частичная занятость", "project": "Проектная работа", "internship": "Стажировка"}
+    schedule = {"id": "", "name": EMP_MAP.get(raw.get("employment", ""), "")}
     work_format = []
-    place = (raw.get("place_of_work") or {}).get("title", "")
-    if place:
-        work_format.append({"id": "", "name": place})
-
-    ts = raw.get("date_published")
-    published_at = ""
-    if ts:
-        try:
-            published_at = datetime.fromtimestamp(int(ts), MOSCOW_TZ).strftime("%Y-%m-%dT%H:%M:%S")
-        except (ValueError, OverflowError, OSError):
-            published_at = ""
+    if raw.get("remoteWork"):
+        work_format.append({"id": "remote", "name": "Удалённо"})
 
     return {
         "id": vac_id,
         "name": name,
         "alternate_url": url,
-        "employer": {"id": str((raw.get("client") or {}).get("id", "")), "name": raw.get("firm_name", "") or ""},
+        "employer": {"id": str(comp.get("id", "")), "name": comp.get("title", "") or ""},
         "salary": salary,
-        "area": area,
+        "area": {"id": "", "name": area_name},
         "schedule": schedule,
         "work_format": work_format,
-        "experience": experience,
+        "experience": {"id": "", "name": ""},
         "snippet": {"requirement": "", "responsibility": ""},
         "published_at": published_at,
     }
 
 
-def fetch_superjob(key, keyword, town_ids, period=3, max_pages=5):
-    """Поиск вакансий через официальный API SuperJob. Пустой ключ → []."""
-    if not key:
-        return []
-    date_from = int(time.time()) - period * 86400
-    headers = {"X-Api-App-Id": key, "User-Agent": BROWSER_HEADERS["User-Agent"]}
+def fetch_habr_career(location_code, location_name, period=3, max_pages=3, keyword=None):
+    """Вакансии города (location_code, напр. c_715) с Хабр Карьеры по ключевику. Без ключа."""
+    headers = {"User-Agent": BROWSER_HEADERS["User-Agent"], "Accept": "application/json"}
+    cutoff = (get_moscow_time() - timedelta(days=period)).date()
 
     all_items = []
-    for page in range(max(1, max_pages)):
-        params = [
-            ("keyword", keyword),
-            ("order_field", "date"),
-            ("order_direction", "desc"),
-            ("date_published_from", date_from),
-            ("count", 100),
-            ("page", page),
-        ]
-        for t in town_ids:
-            params.append(("t", int(t)))
+    for page in range(1, max_pages + 1):
+        params = [("sort", "date"), ("type", "all"), ("page", page), ("locations[]", location_code)]
+        if keyword:
+            params.append(("q", keyword))
         try:
-            r = requests.get(SUPERJOB_API_URL, params=params, headers=headers, timeout=15)
+            r = requests.get(HABR_VAC_API, params=params, headers=headers, timeout=15)
             if r.status_code != 200:
-                logging.warning(f"SuperJob HTTP {r.status_code}: {r.text[:150]}")
+                logging.warning(f"Habr Career HTTP {r.status_code}, page={page}")
                 break
             data = r.json()
-            all_items.extend(_normalize_superjob(o) for o in data.get("objects", []))
-            if not data.get("more"):
+            lst = data.get("list", [])
+            if not lst:
+                break
+            stop = False
+            for raw in lst:
+                item = _normalize_habr(raw, location_name)
+                pa = (item["published_at"] or "")[:10]
+                if pa:
+                    try:
+                        if datetime.strptime(pa, "%Y-%m-%d").date() < cutoff:
+                            stop = True
+                            continue
+                    except ValueError:
+                        pass
+                all_items.append(item)
+            if stop or page >= data.get("meta", {}).get("totalPages", 1):
                 break
             time.sleep(0.4)
         except Exception as e:
-            logging.warning(f"SuperJob fetch error (page={page}): {e}")
+            logging.warning(f"Habr Career fetch error (page={page}): {e}")
             break
     return all_items
+
+
+# ─────────────────────────────────────────────
+#  Работа.ру — парсинг JSON-LD JobPosting со страницы (без ключа). Только для NN-бота.
+#  nn.rabota.ru = Нижний Новгород и область; гео-отсев по городу — в is_target_geo.
+# ─────────────────────────────────────────────
+
+RABOTA_SEARCH_URL = "https://nn.rabota.ru/vacancy/"
+
+
+def _normalize_rabota(jp):
+    """JobPosting (schema.org) с rabota.ru → наш стандартный словарь."""
+    title = jp.get("title", "") or ""
+    url = jp.get("url", "") or ""
+    m = re.search(r'/vacancy/(\d+)', url)
+    vac_id = m.group(1) if m else url
+
+    org = jp.get("hiringOrganization") or {}
+
+    bs = jp.get("baseSalary") or {}
+    est_val = (jp.get("estimatedSalary") or {}).get("value") or {}
+    sfrom = bs.get("minValue") or est_val.get("minValue") or None   # 0 → None
+    sto = bs.get("maxValue") or None
+    cur = bs.get("currency") or (jp.get("estimatedSalary") or {}).get("currency") or "RUB"
+    cur = {"RUB": "RUR"}.get(cur, cur)
+    salary = {"from": sfrom, "to": sto, "currency": cur} if (sfrom or sto) else None
+
+    addr = ((jp.get("jobLocation") or {}).get("address") or {}).get("streetAddress", "") or ""
+    # последний сегмент адреса = город (Нижний Новгород / Дзержинск / Арзамас …).
+    # Адрес пуст → не угадываем город, но это nn-регион → метим «Нижегородская область»
+    # (пройдёт по маркеру 'нижегородск'; явные не-целевые города вроде Арзамаса отсекутся).
+    city = addr.split(",")[-1].strip() if addr else "Нижегородская область"
+
+    return {
+        "id": vac_id,
+        "name": title,
+        "alternate_url": url,
+        "employer": {"id": "", "name": org.get("name", "") or ""},
+        "salary": salary,
+        "area": {"id": "", "name": city},
+        "schedule": {"id": "", "name": ""},
+        "work_format": [],
+        "experience": {"id": "", "name": ""},
+        "snippet": {"requirement": "", "responsibility": ""},
+        "published_at": jp.get("datePosted", "") or "",
+    }
+
+
+def fetch_rabota(keyword, period=3):
+    """Свежие вакансии rabota.ru (НН и область) по ключевику из JSON-LD JobPosting."""
+    headers = dict(BROWSER_HEADERS)
+    headers["Accept-Language"] = "ru-RU,ru;q=0.9"
+    cutoff = (get_moscow_time() - timedelta(days=period)).date()
+    try:
+        r = requests.get(RABOTA_SEARCH_URL, params={"query": keyword}, headers=headers, timeout=20)
+        if r.status_code != 200:
+            logging.warning(f"rabota.ru HTTP {r.status_code} (q={keyword})")
+            return []
+        m = re.search(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', r.text, re.S)
+        if not m:
+            return []
+        arr = json.loads(m.group(1))
+        jps = [x for x in (arr if isinstance(arr, list) else [arr])
+               if isinstance(x, dict) and x.get("@type") == "JobPosting"]
+    except Exception as e:
+        logging.warning(f"rabota.ru fetch error (q={keyword}): {e}")
+        return []
+
+    items = []
+    for jp in jps:
+        item = _normalize_rabota(jp)
+        pa = (item["published_at"] or "")[:10]
+        if pa:
+            try:
+                if datetime.strptime(pa, "%Y-%m-%d").date() < cutoff:
+                    continue
+            except ValueError:
+                pass
+        items.append(item)
+    return items
 
 
 def build_details(item):
