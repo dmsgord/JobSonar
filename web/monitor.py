@@ -30,7 +30,8 @@ BOTS = {
     "main.py":           ("HR Bot",        "status_hr.txt",        "log_hr.txt"),
     "main_analyst.py":   ("Analyst Bot",   "status_analyst.txt",   "log_analyst.txt"),
     "main_sales.py":     ("Sales Bot",     "status_sales.txt",     "log_sales.txt"),
-    "main_recruiter.py": ("Recruiter Bot", "status_recruiter.txt", "log_recruiter.txt")
+    "main_recruiter.py": ("Recruiter Bot", "status_recruiter.txt", "log_recruiter.txt"),
+    "main_nn.py":        ("NN Bot",        "status_nn.txt",        "log_nn.txt")
 }
 
 # --- ЛОГИКА ---
