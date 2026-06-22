@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 import re
 import sys
 import time
@@ -613,6 +614,11 @@ def _get_rabota_session():
         s = requests.Session()
         s.headers.update(BROWSER_HEADERS)
         s.headers["Accept-Language"] = "ru-RU,ru;q=0.9"
+        # rabota.ru банит BY-IP → весь rabota-трафик через SOCKS-туннель на RU-сервер
+        # (RABOTA_PROXY=socks5h://127.0.0.1:1080). Если не задан — ходим напрямую.
+        proxy = os.getenv("RABOTA_PROXY")
+        if proxy:
+            s.proxies = {"http": proxy, "https": proxy}
         try:
             s.get("https://nn.rabota.ru/", timeout=(8, 15))  # прогрев: куки
         except Exception:
