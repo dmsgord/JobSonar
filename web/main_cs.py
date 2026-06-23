@@ -75,7 +75,8 @@ def title_relevant(title, rules):
 def filter_and_process(items, rules):
     unique_items = list({v['id']: v for v in items}.values())
     total = len(unique_items)
-    skipped_db = skipped_title = skipped_geo = skipped_exp = processed = 0
+    skipped_db = skipped_title = skipped_geo = skipped_exp = skipped_salary = processed = 0
+    min_salary = rules.get('min_salary', 0)
 
     for item in unique_items:
         vac_id = item['id']
@@ -103,8 +104,12 @@ def filter_and_process(items, rules):
             skipped_geo += 1
             continue
 
+        salary_text, is_bold_salary, skip_salary = format_salary(item.get('salary'), min_salary)
+        if skip_salary:  # зарплата указана и ниже порога (даже как "от") → не показываем
+            skipped_salary += 1
+            continue
+
         details, details_text = build_details(item)
-        salary_text, is_bold_salary, _ = format_salary(item.get('salary'), 0)  # порог не фильтруем
         salary_html = f"<b>{salary_text}</b>" if is_bold_salary else salary_text
         pub_date = format_pub_date(item)
 
@@ -133,7 +138,7 @@ def filter_and_process(items, rules):
         time.sleep(0.5)
 
     logging.info(f"📊 CS batch: total={total} db={skipped_db} title={skipped_title} "
-                 f"geo={skipped_geo} exp={skipped_exp} sent={processed}")
+                 f"geo={skipped_geo} exp={skipped_exp} sal={skipped_salary} sent={processed}")
     return processed
 
 
