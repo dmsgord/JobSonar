@@ -30,18 +30,18 @@ logging.basicConfig(
 
 from config_nn import (
     TG_TOKEN, TG_CHAT_ID, PROFILES, DB_NAME, TARGET_AREAS, AREA_NAME_MARKERS,
-    SEARCH_PERIOD, RABOTA_PERIOD
+    SEARCH_PERIOD, RABOTA_PERIOD, SJ_TOWN_IDS, SJ_PERIOD
 )
 from db import init_db, is_sent, mark_as_sent, get_daily_stats
 from utils import (
     BotContext, get_moscow_time, smart_contains,
     get_smart_sleep_time, init_updates, report_error, send_daily_stats,
     build_details, format_salary, format_pub_date, fetch_rabota, reset_rabota_breaker,
-    fetch_rabota_details
+    fetch_rabota_details, fetch_superjob
 )
 
 # Шильдики источника (верхняя строка сообщения)
-SOURCE_BADGE = {"hh": "🟦 hh.ru", "rb": "🟥 Работа.ру"}
+SOURCE_BADGE = {"hh": "🟦 hh.ru", "rb": "🟥 Работа.ру", "sj": "🟩 SuperJob"}
 ROLE_LABEL = {"HR": "👔 HR", "Analyst": "📊 Аналитик"}
 
 bot = BotContext(TG_TOKEN, TG_CHAT_ID, STATUS_FILE, os.path.join(BASE_DIR, DB_NAME))
@@ -194,8 +194,8 @@ def main_loop():
     init_db()
     bot.last_update_id = init_updates(TG_TOKEN)
     last_stats_date = None
-    logging.info("🚀 NN Combined Bot v1.2 Started | источники: hh.ru + Работа.ру")
-    send_telegram("🟢 <b>NN Bot v1.2 Started</b> (HR + Аналитик, Н.Новгород/Дзержинск)\nИсточники: hh.ru + Работа.ру")
+    logging.info("🚀 NN Combined Bot v1.3 Started | источники: hh.ru + Работа.ру + SuperJob")
+    send_telegram("🟢 <b>NN Bot v1.3 Started</b> (HR + Аналитик, Н.Новгород/Дзержинск)\nИсточники: hh.ru + Работа.ру + SuperJob")
 
     while True:
         try:
@@ -218,6 +218,16 @@ def main_loop():
                     check_remote_stop()
                     rb_items = fetch_rabota(q, period=RABOTA_PERIOD)
                     filter_and_process(rb_items, profile_name, rules, source="rb")
+
+            # Источник 3: SuperJob (офиц. публичный API). Гео НН/Дзержинск отдаём API (t=town_ids),
+            # поэтому is_target_geo почти всё пропускает — но он остаётся страховкой.
+            # Нет ключа SUPERJOB_APP_ID в .env → fetch_superjob вернёт [] (бот работает как раньше).
+            set_status("🔎 SuperJob (Н.Новгород/Дзержинск)...")
+            for profile_name, rules in PROFILES.items():
+                for q in rules["keywords"]:
+                    check_remote_stop()
+                    sj_items = fetch_superjob(q, town_ids=SJ_TOWN_IDS, period=SJ_PERIOD)
+                    filter_and_process(sj_items, profile_name, rules, source="sj")
 
             now = get_moscow_time()
             seconds, next_run = get_smart_sleep_time()

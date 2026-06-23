@@ -725,6 +725,113 @@ def fetch_rabota_details(url):
     return sched, exp
 
 
+# ─────────────────────────────────────────────
+#  SuperJob — официальный публичный API (X-Api-App-Id, без OAuth/оплаты для ЧТЕНИЯ вакансий).
+#  Курс «без ключей» — сделано исключение по запросу владельца (сайт за капчей, парсер невозможен).
+#  Гео НН/Дзержинск отдаём API через t=[town_ids]: 12=Нижний Новгород, 639=Дзержинск (Нижегор. обл.).
+#  Ключ в env SUPERJOB_APP_ID; при блокировке api.superjob.ru с BY-IP — env SUPERJOB_PROXY (RU-туннель).
+# ─────────────────────────────────────────────
+
+SUPERJOB_API_URL = "https://api.superjob.ru/2.0/vacancies/"
+_sj_session = None
+_sj_last_ts = 0.0
+_SJ_MIN_GAP = 0.6  # лимит API = 120 запросов/мин с IP → держим ≥0.5с между запросами
+
+
+def _get_sj_session():
+    global _sj_session
+    if _sj_session is None:
+        s = requests.Session()
+        s.headers.update({"User-Agent": "JobSonarBot/1.0 (NN)",
+                          "X-Api-App-Id": os.getenv("SUPERJOB_APP_ID", "")})
+        proxy = os.getenv("SUPERJOB_PROXY")  # задать, только если BY-IP заблокирован
+        if proxy:
+            s.proxies = {"http": proxy, "https": proxy}
+        _sj_session = s
+    return _sj_session
+
+
+def _normalize_superjob(o):
+    """Вакансия SuperJob API → наш стандартный словарь (как _normalize_vacancy для hh)."""
+    vac_id = str(o.get("id", ""))
+    pf = o.get("payment_from") or 0      # 0 = зарплата не указана
+    pt = o.get("payment_to") or 0
+    cur = {"rub": "RUR", "RUB": "RUR"}.get(o.get("currency", "rub"),
+                                           (o.get("currency") or "RUR").upper())
+    salary = {"from": pf or None, "to": pt or None, "currency": cur} if (pf or pt) else None
+
+    town = o.get("town") or {}
+    place = ((o.get("place_of_work") or {}).get("title", "") or "").lower()
+    if "удал" in place:
+        wf = [{"id": "remote", "name": "Удалённо"}]
+    elif "территории работодател" in place:
+        wf = [{"id": "onSite", "name": "На месте работодателя"}]
+    elif "разъезд" in place:
+        wf = [{"id": "field", "name": "Разъездной"}]
+    else:
+        wf = []
+
+    exp_title = (o.get("experience") or {}).get("title", "") or ""
+    exp_id = "noExperience" if "без опыта" in exp_title.lower() else ""
+
+    ts = o.get("date_published")
+    published_at = ""
+    if ts:
+        try:
+            published_at = datetime.fromtimestamp(int(ts), MOSCOW_TZ).strftime("%Y-%m-%dT%H:%M:%S")
+        except (ValueError, OSError, TypeError):
+            published_at = ""
+
+    return {
+        "id": vac_id,
+        "name": o.get("profession", "") or "",
+        "alternate_url": o.get("link", "") or f"https://www.superjob.ru/vakansii/{vac_id}.html",
+        "employer": {"id": str(o.get("id_client", "")), "name": o.get("firm_name", "") or ""},
+        "salary": salary,
+        "area": {"id": str(town.get("id", "")), "name": town.get("title", "") or ""},
+        "schedule": {"id": "", "name": (o.get("type_of_work") or {}).get("title", "") or ""},
+        "work_format": wf,
+        "experience": {"id": exp_id, "name": exp_title},
+        "snippet": {"requirement": (o.get("candidat") or "")[:300], "responsibility": ""},
+        "published_at": published_at,
+    }
+
+
+def fetch_superjob(keyword, town_ids=(12, 639), period=3, max_pages=2):
+    """Свежие вакансии SuperJob (НН+Дзержинск через t=town_ids) по ключевику.
+    Публичный /2.0/vacancies/ с X-Api-App-Id. Нет ключа/ошибка → []."""
+    global _sj_last_ts
+    if not os.getenv("SUPERJOB_APP_ID"):
+        return []
+    s = _get_sj_session()
+    items = []
+    for page in range(max(1, max_pages)):
+        gap = _sj_last_ts + _SJ_MIN_GAP - time.monotonic()
+        if gap > 0:
+            time.sleep(gap)
+        _sj_last_ts = time.monotonic()
+        # keywords[0] с srws=1 = поиск В ДОЛЖНОСТИ (аналог hh search_field=name),
+        # skwc=and = все слова. Простой keyword= даёт мусорный полнотекст ("Учетчик на склад").
+        params = [("keywords[0][keys]", keyword), ("keywords[0][srws]", 1),
+                  ("keywords[0][skwc]", "and"), ("period", period),
+                  ("order_field", "date"), ("count", 100), ("page", page)]
+        for t in town_ids:
+            params.append(("t", t))
+        try:
+            r = s.get(SUPERJOB_API_URL, params=params, timeout=(8, 15))
+            if r.status_code != 200:
+                logging.warning(f"SuperJob HTTP {r.status_code} (q={keyword})")
+                break
+            data = r.json()
+        except Exception as e:
+            logging.warning(f"SuperJob fetch error (q={keyword}): {str(e)[:120]}")
+            break
+        items.extend(_normalize_superjob(o) for o in data.get("objects", []))
+        if not data.get("more"):
+            break
+    return items
+
+
 def build_details(item):
     """Собирает форматы работы вакансии: (['Удалённо', ...], 'удалённо, ...')."""
     details = []
