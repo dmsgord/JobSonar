@@ -52,8 +52,15 @@ def check_remote_stop():
 def fetch_company_vacancies(employer_ids, area=None, schedule=None, period=3):
     return bot.fetch_company_vacancies(employer_ids, area=area, schedule=schedule, period=period)
 
-def fetch_hh_paginated_global(text, period=7):
-    return bot.fetch_hh_paginated(text, period=period)
+def fetch_hh_paginated_global(text, period=7, max_pages=1):
+    return bot.fetch_hh_paginated(text, period=period, max_pages=max_pages)
+
+
+def or_batches(phrases, size=6):
+    """Объединяет ключевики в OR-запросы hh: '"A" OR "B" …' — меньше запросов к hh.ru
+    (а значит меньше шанс словить 403) и быстрее цикл. Пост-фильтр не меняется."""
+    for i in range(0, len(phrases), size):
+        yield " OR ".join(f'"{p}"' for p in phrases[i:i + size])
 
 
 
@@ -171,11 +178,13 @@ def main_loop():
                 for _role, _rules in ALL_PROFILES.items():
                     filter_and_process(list(found_map.values()), _rules)
 
-            set_status("🔎 Global поиск...")
+            set_status("🔎 Global поиск (OR-батчи)...")
             for role, rules in ALL_PROFILES.items():
-                for q in rules["keywords"]:
+                for orq in or_batches(rules["keywords"], size=6):
                     check_remote_stop()
-                    items = fetch_hh_paginated_global(q, period=3)
+                    # OR-батч объединяет до 6 ключевиков в один запрос → читаем 3 стр.,
+                    # чтобы не потерять полноту по отдельным словам (поведение фильтра то же).
+                    items = fetch_hh_paginated_global(orq, period=3, max_pages=3)
                     filter_and_process(items, rules, is_global=True)
 
             now = get_moscow_time()
