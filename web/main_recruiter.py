@@ -47,8 +47,15 @@ def send_telegram(text):
 def check_remote_stop():
     bot.check_remote_stop()
 
-def fetch_hh(text, period=SEARCH_PERIOD):
-    return bot.fetch_hh_paginated(text, period=period, schedule="remote")
+def fetch_hh(text, period=SEARCH_PERIOD, max_pages=1):
+    return bot.fetch_hh_paginated(text, period=period, schedule="remote", max_pages=max_pages)
+
+
+def or_batches(phrases, size=6):
+    """Объединяет ключевики в OR-запросы hh ('"A" OR "B" …') — меньше запросов к hh.ru,
+    тот же пост-фильтр. OR-батч читаем на 3 стр., чтобы не терять полноту по словам."""
+    for i in range(0, len(phrases), size):
+        yield " OR ".join(f'"{p}"' for p in phrases[i:i + size])
 
 
 def get_smart_sleep_time():
@@ -154,10 +161,10 @@ def main_loop():
             set_status("🚀 Поиск...")
 
             rules = PROFILES['Recruiter']
-            for q in rules["keywords"]:
-                set_status(f"🔎 Ищу: {q}")
+            for orq in or_batches(rules["keywords"], size=6):
+                set_status("🔎 Ищу (OR-батч)…")
                 check_remote_stop()
-                items = fetch_hh(q, period=3)
+                items = fetch_hh(orq, period=3, max_pages=3)
                 if items:
                     process_items(items, rules)
 
