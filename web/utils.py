@@ -815,8 +815,10 @@ def fetch_superjob(keyword, town_ids=(12, 639), period=3, max_pages=2):
         params = [("keywords[0][keys]", keyword), ("keywords[0][srws]", 1),
                   ("keywords[0][skwc]", "and"), ("period", period),
                   ("order_field", "date"), ("count", 100), ("page", page)]
+        # ВАЖНО: массив городов — это t[]=12&t[]=639. Простой t=12&t=639 API схлопывает
+        # до последнего города (терялся весь Нижний Новгород!). t[] = корректное объединение.
         for t in town_ids:
-            params.append(("t", t))
+            params.append(("t[]", t))
         try:
             r = s.get(SUPERJOB_API_URL, params=params, timeout=(8, 15))
             if r.status_code != 200:
