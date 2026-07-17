@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import json
+import html as _html
 import signal
 import logging
 import random
@@ -177,9 +178,29 @@ def _area_id_from_name(area_name):
 
 
 def _extract_state_json(html):
-    """Извлекает большой JSON-стейт страницы hh.ru."""
+    """Извлекает большой JSON-стейт страницы hh.ru.
+
+    С июля 2026 hh.ru встраивает стейт в
+    `<template style="display:none" id="HH-Lux-InitialState">{…}</template>`,
+    причём JSON HTML-экранирован (&#34; вместо " и т.п.) → нужен html.unescape.
+    Старый формат (data-ssr-state-length="N">{…}) оставлен как fallback.
+    """
+    # Новый формат (2026-07): <template id="HH-Lux-InitialState">…escaped JSON…</template>
     try:
-        # hh.ru встраивает стейт в тег с data-ssr-state-length
+        m = re.search(r'id="HH-Lux-InitialState"[^>]*>', html)
+        if m:
+            start = m.end()
+            end = html.find("</template>", start)
+            if end != -1:
+                inner = _html.unescape(html[start:end])
+                data = json.loads(inner)
+                if isinstance(data, dict):
+                    return data
+    except Exception as e:
+        logging.debug(f"_extract_state_json (template) error: {e}")
+
+    # Старый формат: data-ssr-state-length="N">{…}
+    try:
         m = re.search(r'data-ssr-state-length="\d+"[^>]*>', html)
         if m:
             start = m.end()
@@ -188,7 +209,7 @@ def _extract_state_json(html):
                 data, _ = decoder.raw_decode(html, start)
                 return data
     except Exception as e:
-        logging.debug(f"_extract_state_json error: {e}")
+        logging.debug(f"_extract_state_json (ssr-state) error: {e}")
     return None
 
 
