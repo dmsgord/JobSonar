@@ -1,0 +1,16 @@
+[Unit]
+Description=JobSonar Product Owner Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/JobSonar/web
+ExecStart=/usr/bin/python3 -u main_po.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/JobSonar/web/log_po_systemd.txt
+StandardError=append:/root/JobSonar/web/log_po_systemd.txt
+
+[Install]
+WantedBy=multi-user.target
