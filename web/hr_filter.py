@@ -8,7 +8,7 @@
 from collections import namedtuple
 
 from config import TARGET_AREAS
-from scoring import quality_gate, score_employer
+from scoring import BOLD_SALARY_FROM, quality_gate, score_employer
 from utils import (
     build_details, format_salary, hits_stop_word, is_russian_area,
     looks_like_private_person, smart_contains,
@@ -70,7 +70,7 @@ def decide(item, rules, target_areas=TARGET_AREAS):
     if not ok:
         return _reject("company", score)
 
-    salary_text, is_bold, skip_salary = format_salary(salary, threshold)
+    salary_text, is_bold, skip_salary = format_salary(salary, threshold, bold_from=BOLD_SALARY_FROM)
     if skip_salary:
         return Decision(False, "salary", tier, score, salary_text, is_bold, details, experience)
 

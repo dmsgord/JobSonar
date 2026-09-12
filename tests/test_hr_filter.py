@@ -92,13 +92,23 @@ def test_weak_company_rejects_even_with_salary():
     assert decide(weak, RULES).reason == "company"
 
 
-def test_mid_company_needs_higher_salary():
-    """Скор 36 (4.3 + 128 отзывов) → планка 200k: 180k не проходит, 210k проходит."""
+def test_salary_below_flat_threshold_rejects():
+    """Планка одна для всех — 100k, независимо от скора компании."""
     mid = {"rating": 4.3, "reviews_count": 128, "has_logo": False, "branding": False}
-    low_pay = vacancy(employer=mid, salary={"from": 180000, "to": None, "currency": "RUR"})
-    ok_pay = vacancy(employer=mid, salary={"from": 210000, "to": None, "currency": "RUR"})
+    low_pay = vacancy(employer=mid, salary={"from": 90000, "to": None, "currency": "RUR"})
+    ok_pay = vacancy(employer=mid, salary={"from": 120000, "to": None, "currency": "RUR"})
     assert decide(low_pay, RULES).reason == "salary"
     assert decide(ok_pay, RULES).send is True
+
+
+def test_modest_salary_is_shown_without_bold():
+    d = decide(vacancy(salary={"from": 120000, "to": None, "currency": "RUR"}), RULES)
+    assert (d.send, d.salary_text, d.bold) == (True, "от 120000 ₽", False)
+
+
+def test_large_salary_is_bold():
+    d = decide(vacancy(salary={"from": 300000, "to": None, "currency": "RUR"}), RULES)
+    assert (d.send, d.bold) == (True, True)
 
 
 def test_vacancy_without_salary_is_sent():

@@ -932,22 +932,25 @@ def build_details(item):
     return details, ", ".join(details).lower()
 
 
-def format_salary(sal, threshold):
+def format_salary(sal, threshold, bold_from=None):
     """
     Возвращает (salary_text, is_bold, skip).
     Семантика (одинакова для всех ботов): зарплата не указана → показываем "-";
     RUR ниже порога → skip; RUR выше порога и любые USD/EUR → жирным.
+    bold_from — отдельный порог выделения жирным (по умолчанию совпадает с threshold):
+    HR-бот отсеивает от 100k, а подсвечивает только крупные суммы.
     """
     if not sal:
         return "-", False, False
+    bold_from = threshold if bold_from is None else bold_from
     currency = sal.get('currency')
     lower = sal.get('from')
     upper = sal.get('to')
     if currency == 'RUR':
         if lower and lower >= threshold:
-            return f"от {lower} ₽", True, False
+            return f"от {lower} ₽", lower >= bold_from, False
         if upper and upper >= threshold:
-            return f"до {upper} ₽", True, False
+            return f"до {upper} ₽", upper >= bold_from, False
         if lower or upper:
             return "-", False, True
         return "-", False, False

@@ -15,11 +15,16 @@ TIER_DIAMOND = "💎"
 TIER_FIRE = "🔥"
 TIER_PLAIN = "⚪"
 
-# скор → минимальная зарплата, при которой вакансию стоит показывать
-SALARY_LADDER = (
-    (55, 150000, TIER_DIAMOND),
-    (35, 200000, TIER_FIRE),
-    (20, 250000, TIER_PLAIN),
+# Зарплатных правил от скора больше нет: планка одна для всех, скор решает только
+# «шлём или нет» и каким значком помечена компания.
+MIN_SALARY = 100000        # ниже — вакансия не показывается
+BOLD_SALARY_FROM = 250000  # от этой суммы сумма выделяется жирным
+MIN_SCORE_TO_SEND = 20
+
+TIER_BANDS = (
+    (55, TIER_DIAMOND),
+    (35, TIER_FIRE),
+    (MIN_SCORE_TO_SEND, TIER_PLAIN),
 )
 
 BASE_SCORE_NO_RATING = 20
@@ -84,15 +89,12 @@ def score_employer(employer, salary=None):
 
 
 def required_salary(score):
-    """Минимальная зарплата для этого скора; None — не шлём совсем."""
-    for min_score, salary, _tier in SALARY_LADDER:
-        if score >= min_score:
-            return salary
-    return None
+    """Минимальная зарплата: одна для всех, None — компания не проходит по скору."""
+    return MIN_SALARY if score >= MIN_SCORE_TO_SEND else None
 
 
 def tier_emoji(score):
-    for min_score, _salary, tier in SALARY_LADDER:
+    for min_score, tier in TIER_BANDS:
         if score >= min_score:
             return tier
     return ""
