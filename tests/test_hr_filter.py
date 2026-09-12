@@ -102,7 +102,15 @@ def test_mid_company_needs_higher_salary():
 
 
 def test_vacancy_without_salary_is_sent_for_strong_company():
+    """Зарплаты нет, но компания сильная и тайтл точный ('HR Business Partner')."""
     assert decide(vacancy(salary=None), RULES).send is True
+
+
+def test_vacancy_without_salary_needs_exact_title():
+    """Комбо-тайтл без зарплаты не берём: бренд вытягивает скор, роль может быть любой."""
+    combo = vacancy(name="Руководитель направления обучения персонала", salary=None)
+    assert decide(combo, RULES).reason == "salary"
+    assert decide(vacancy(name="Руководитель направления обучения персонала"), RULES).send is True
 
 
 def test_vacancy_without_salary_is_rejected_for_weak_company():

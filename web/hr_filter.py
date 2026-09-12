@@ -26,12 +26,13 @@ def _reject(reason, score=0):
 
 
 def _title_matches(title, rules):
+    """(подходит ли тайтл, точное ли это попадание в direct_titles)."""
     if any(smart_contains(title, w) for w in rules["direct_titles"]):
-        return True
+        return True, True
     has_level = any(smart_contains(title, w) for w in rules["role_levels"])
     context_words = rules.get("role_context", rules.get("hr_context", []))
     has_context = any(smart_contains(title, w) for w in context_words)
-    return has_level and has_context
+    return has_level and has_context, False
 
 
 def decide(item, rules, target_areas=TARGET_AREAS):
@@ -39,7 +40,8 @@ def decide(item, rules, target_areas=TARGET_AREAS):
 
     if hits_stop_word(title, rules["stop_words"]):
         return _reject("title")
-    if not _title_matches(title, rules):
+    title_ok, is_direct_title = _title_matches(title, rules)
+    if not title_ok:
         return _reject("title")
 
     experience = item.get("experience", {})
@@ -68,9 +70,12 @@ def decide(item, rules, target_areas=TARGET_AREAS):
     if not ok:
         return _reject("company", score)
 
-    # hh отдаёт compensation с пустыми from/to — считаем это отсутствием зарплаты
+    # hh отдаёт compensation с пустыми from/to — считаем это отсутствием зарплаты.
+    # Без зарплаты вилка «скор ↔ зарплата» не работает, поэтому требуем и сильную
+    # компанию, и точный тайтл: у крупного бренда комбо-тайтл ловит что попало
+    # («Руководитель операций сети ПВЗ», «Директор операционного офиса»).
     has_salary = bool(salary and (salary.get("from") or salary.get("to")))
-    if not has_salary and score < NO_SALARY_MIN_SCORE:
+    if not has_salary and (score < NO_SALARY_MIN_SCORE or not is_direct_title):
         return Decision(False, "salary", tier, score, "-", False, details, experience)
 
     salary_text, is_bold, skip_salary = format_salary(salary, threshold)
