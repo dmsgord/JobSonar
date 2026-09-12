@@ -983,6 +983,30 @@ def format_salary(sal, threshold, bold_from=None):
     return "-", False, False
 
 
+def vacancy_age_minutes(item, now=None):
+    """Сколько минут прошло с публикации вакансии на hh. None — даты нет или она битая."""
+    raw = (item or {}).get("published_at") or ""
+    # hh отдаёт "2026-09-12T11:30:00.485+03:00" — с миллисекундами и двоеточием
+    # в смещении; strptime("%z") такое не берёт, fromisoformat берёт.
+    try:
+        published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=MOSCOW_TZ)
+    now = now or get_moscow_time()
+    return int((now - published).total_seconds() // 60)
+
+
+def age_summary(items, now=None):
+    """(медиана, максимум, сколько посчитано) возраста вакансий в минутах."""
+    ages = [a for a in (vacancy_age_minutes(i, now=now) for i in items) if a is not None]
+    if not ages:
+        return None, None, 0
+    ages.sort()
+    return ages[len(ages) // 2], ages[-1], len(ages)
+
+
 def format_pub_date(item):
     """'2026-06-09T...' → '09.06'. Не падает, если дата пустая."""
     dt = item.get('published_at', '').split('T')[0]
@@ -1094,9 +1118,10 @@ class BotContext:
         return fetch_hh_search(self.session, params, max_pages=max_pages)
 
 
-def get_smart_sleep_time(weekend_like_weekday=False):
+def get_smart_sleep_time(weekend_like_weekday=False, cycle_minutes=None):
     """Пауза до следующего цикла. weekend_like_weekday=True — суббота и воскресенье
-    работают по будничному расписанию (HR-бот: вакансии постят и в выходные)."""
+    работают по будничному расписанию (HR-бот: вакансии постят и в выходные).
+    cycle_minutes=(от, до) — своя длина дневного цикла вместо 20-30 минут."""
     now = get_moscow_time()
     is_weekend = now.weekday() >= 5 and not weekend_like_weekday
     if not weekend_like_weekday and now.weekday() == 6 and now.hour >= 20:
@@ -1114,7 +1139,8 @@ def get_smart_sleep_time(weekend_like_weekday=False):
             base_date = now if now.hour < 7 else now + timedelta(days=1)
             target = base_date.replace(hour=7, minute=10, second=0, microsecond=0) + timedelta(minutes=random.randint(0, 20))
         else:
-            target = now + timedelta(minutes=20 + random.randint(0, 10))
+            low, high = cycle_minutes or (20, 30)
+            target = now + timedelta(minutes=random.randint(low, high))
     if target <= now:
         target = now + timedelta(minutes=5)
     return max(10, (target - now).total_seconds()), target

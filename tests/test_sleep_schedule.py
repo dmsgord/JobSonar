@@ -63,3 +63,21 @@ def test_weekday_behaviour_is_unchanged(frozen):
     flagged, _t2 = utils.get_smart_sleep_time(weekend_like_weekday=True)
     assert 20 * 60 <= plain <= 31 * 60
     assert 20 * 60 <= flagged <= 31 * 60
+
+
+def test_custom_cycle_length_is_respected(frozen):
+    frozen(MONDAY_NOON)
+    seconds, _target = utils.get_smart_sleep_time(cycle_minutes=(7, 8))
+    assert 7 * 60 <= seconds <= 8 * 60
+
+
+def test_custom_cycle_length_applies_on_weekend_like_weekday(frozen):
+    frozen(SATURDAY_NOON)
+    seconds, _t = utils.get_smart_sleep_time(weekend_like_weekday=True, cycle_minutes=(7, 8))
+    assert 7 * 60 <= seconds <= 8 * 60
+
+
+def test_custom_cycle_length_does_not_break_night_sleep(frozen):
+    frozen(datetime(2026, 9, 14, 2, 0))
+    _seconds, target = utils.get_smart_sleep_time(cycle_minutes=(7, 8))
+    assert target.hour == 7
