@@ -118,6 +118,20 @@ def smart_contains(text, word):
     return word_lower in text_lower
 
 
+def hits_stop_word(text, stop_words):
+    """True, если в тексте есть стоп-слово НА ГРАНИЦЕ СЛОВА.
+
+    Простой `in` ловил подстроки: стоп 'водитель' убивал 'Руководитель отдела
+    персонала' — то есть собственный direct_title бота. Совпадение ищем с начала
+    слова, хвост свободен (падежи: 'водителя', 'продажам').
+    """
+    text_lower = text.lower()
+    for word in stop_words:
+        if re.search(r'(?<!\w)' + re.escape(word.lower()), text_lower):
+            return True
+    return False
+
+
 def get_clean_category(cat_raw):
     clean = re.sub(r'[^\w\s]', '', cat_raw).strip().upper()
     return CAT_ALIASES.get(clean, '🌐')
