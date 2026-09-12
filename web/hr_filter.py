@@ -8,8 +8,11 @@
 from collections import namedtuple
 
 from config import TARGET_AREAS
-from scoring import quality_gate, score_employer
-from utils import build_details, format_salary, hits_stop_word, is_russian_area, smart_contains
+from scoring import NO_SALARY_MIN_SCORE, quality_gate, score_employer
+from utils import (
+    build_details, format_salary, hits_stop_word, is_russian_area,
+    looks_like_private_person, smart_contains,
+)
 
 Decision = namedtuple(
     "Decision", "send reason tier score salary_text bold details experience"
@@ -56,11 +59,19 @@ def decide(item, rules, target_areas=TARGET_AREAS):
         return _reject("geo")
 
     employer = item.get("employer", {})
+    if looks_like_private_person(employer.get("name", "")):
+        return _reject("company")
+
     salary = item.get("salary")
     score = score_employer(employer, salary=salary)
     ok, tier, threshold, score = quality_gate(employer, salary=salary, score=score)
     if not ok:
         return _reject("company", score)
+
+    # hh отдаёт compensation с пустыми from/to — считаем это отсутствием зарплаты
+    has_salary = bool(salary and (salary.get("from") or salary.get("to")))
+    if not has_salary and score < NO_SALARY_MIN_SCORE:
+        return Decision(False, "salary", tier, score, "-", False, details, experience)
 
     salary_text, is_bold, skip_salary = format_salary(salary, threshold)
     if skip_salary:

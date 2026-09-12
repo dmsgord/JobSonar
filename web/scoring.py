@@ -22,12 +22,18 @@ SALARY_LADDER = (
     (20, 300000, TIER_PLAIN),
 )
 
+# Вакансия без указанной зарплаты не проверяется вилкой, поэтому от такой компании
+# требуем уровень 🔥 и выше — иначе в ленту льются середняки без единой цифры.
+NO_SALARY_MIN_SCORE = 35
+
 BASE_SCORE_NO_RATING = 20
+# Рейтинг на крошечной выборке — шум: ★5.0 при 7 отзывах ничего не говорит о компании
+MIN_REVIEWS_FOR_RATING = 10
 SKIP_CATEGORIES = ("PRIVATE_INDIVIDUAL",)
 
 
 def _rating_points(rating, reviews_count):
-    if rating is None:
+    if rating is None or reviews_count < MIN_REVIEWS_FOR_RATING:
         return BASE_SCORE_NO_RATING
     if rating >= 4.5:
         return 30

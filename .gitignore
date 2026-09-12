@@ -12,6 +12,7 @@ status_*.txt
 diag_*.py
 diag_*.txt
 test_*.py
+!tests/test_*.py
 test_*.bat
 get_token.py
 get_token.bat

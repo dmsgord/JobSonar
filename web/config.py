@@ -14,7 +14,10 @@ DB_NAME = "jobsonar_hr.db"
 CHECK_INTERVAL = 600
 MIN_SALARY = 200000 
 TARGET_AREAS = ["1", "66"] # Москва, Н.Новгород
-SEARCH_PERIOD = 14 
+SEARCH_PERIOD = 14
+# Глубина поиска по осям (v9). Цикл ходит раз в ~10 минут, 3 дней хватает с запасом:
+# больший period тянет лишние страницы и старьё, которое всё равно отсеет is_sent.
+AXIS_SEARCH_PERIOD = 3
 
 PROFILES = {
     'HR': {

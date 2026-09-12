@@ -970,6 +970,25 @@ def format_pub_date(item):
     return "-"
 
 
+def looks_like_private_person(emp_name):
+    """Частное лицо под видом компании: 'Вараксин Александр Дмитриевич', 'ИП Смирнова Е.А.'
+
+    Узкая эвристика: ИП-префикс или отчество в составе имени. Широкий
+    is_individual_person() (Sales/Recruiter) режет и нормальные компании
+    вроде «Аптечная сеть ФармаТ», поэтому HR-бот пользуется этой.
+    """
+    name = (emp_name or "").strip().lower()
+    if not name:
+        return False
+    if re.match(r'^(ип|индивидуальный предприниматель)\b', name):
+        return True
+    parts = re.split(r'[\s,]+', name)
+    if len(parts) < 2:
+        return False
+    return any(p.endswith(('ович', 'евич', 'ьич', 'овна', 'евна', 'ична', 'оглы', 'кызы'))
+               for p in parts)
+
+
 def is_individual_person(emp_name):
     """Эвристика: работодатель — частное лицо/ИП, а не компания (для Sales/Recruiter)."""
     name_lower = emp_name.lower().strip()
