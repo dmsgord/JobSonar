@@ -82,7 +82,7 @@ def test_score_is_clamped_to_0_100():
 
 @pytest.mark.parametrize(
     "score,expected",
-    [(100, 200000), (55, 200000), (54, 250000), (35, 250000), (34, 300000), (20, 300000), (19, None)],
+    [(100, 150000), (55, 150000), (54, 200000), (35, 200000), (34, 250000), (20, 250000), (19, None)],
 )
 def test_required_salary_ladder(score, expected):
     assert required_salary(score) == expected
@@ -102,15 +102,15 @@ def test_quality_gate_rejects_low_score():
 
 
 def test_quality_gate_returns_threshold_for_good_company():
-    # 4.6 + 800 отзывов = 50 → 🔥, планка 250k; лого добавляет 3 и всё ещё 🔥
+    # 4.6 + 800 отзывов = 50 → 🔥, планка 200k; лого добавляет 3 и всё ещё 🔥
     ok, tier, threshold, score = quality_gate(employer(rating=4.6, reviews_count=800))
-    assert (ok, tier, threshold, score) == (True, TIER_FIRE, 250000, 50)
+    assert (ok, tier, threshold, score) == (True, TIER_FIRE, 200000, 50)
 
 
 def test_quality_gate_diamond_requires_extra_signals():
     top = employer(rating=4.6, reviews_count=800, has_logo=True, branding=True)
     ok, tier, threshold, score = quality_gate(top)
-    assert (ok, tier, threshold, score) == (True, TIER_DIAMOND, 200000, 61)
+    assert (ok, tier, threshold, score) == (True, TIER_DIAMOND, 150000, 61)
 
 
 def test_rating_on_tiny_sample_is_ignored():

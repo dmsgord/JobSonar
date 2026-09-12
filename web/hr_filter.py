@@ -8,7 +8,7 @@
 from collections import namedtuple
 
 from config import TARGET_AREAS
-from scoring import NO_SALARY_MIN_SCORE, quality_gate, score_employer
+from scoring import quality_gate, score_employer
 from utils import (
     build_details, format_salary, hits_stop_word, is_russian_area,
     looks_like_private_person, smart_contains,
@@ -40,7 +40,7 @@ def decide(item, rules, target_areas=TARGET_AREAS):
 
     if hits_stop_word(title, rules["stop_words"]):
         return _reject("title")
-    title_ok, is_direct_title = _title_matches(title, rules)
+    title_ok, _is_direct_title = _title_matches(title, rules)
     if not title_ok:
         return _reject("title")
 
@@ -69,14 +69,6 @@ def decide(item, rules, target_areas=TARGET_AREAS):
     ok, tier, threshold, score = quality_gate(employer, salary=salary, score=score)
     if not ok:
         return _reject("company", score)
-
-    # hh отдаёт compensation с пустыми from/to — считаем это отсутствием зарплаты.
-    # Без зарплаты вилка «скор ↔ зарплата» не работает, поэтому требуем и сильную
-    # компанию, и точный тайтл: у крупного бренда комбо-тайтл ловит что попало
-    # («Руководитель операций сети ПВЗ», «Директор операционного офиса»).
-    has_salary = bool(salary and (salary.get("from") or salary.get("to")))
-    if not has_salary and (score < NO_SALARY_MIN_SCORE or not is_direct_title):
-        return Decision(False, "salary", tier, score, "-", False, details, experience)
 
     salary_text, is_bold, skip_salary = format_salary(salary, threshold)
     if skip_salary:

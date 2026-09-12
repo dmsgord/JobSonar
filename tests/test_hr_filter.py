@@ -93,43 +93,45 @@ def test_weak_company_rejects_even_with_salary():
 
 
 def test_mid_company_needs_higher_salary():
-    """Скор 36 (4.3 + 128 отзывов) → планка 250k: 210k не проходит, 260k проходит."""
+    """Скор 36 (4.3 + 128 отзывов) → планка 200k: 180k не проходит, 210k проходит."""
     mid = {"rating": 4.3, "reviews_count": 128, "has_logo": False, "branding": False}
-    low_pay = vacancy(employer=mid, salary={"from": 210000, "to": None, "currency": "RUR"})
-    ok_pay = vacancy(employer=mid, salary={"from": 260000, "to": None, "currency": "RUR"})
+    low_pay = vacancy(employer=mid, salary={"from": 180000, "to": None, "currency": "RUR"})
+    ok_pay = vacancy(employer=mid, salary={"from": 210000, "to": None, "currency": "RUR"})
     assert decide(low_pay, RULES).reason == "salary"
     assert decide(ok_pay, RULES).send is True
 
 
-def test_vacancy_without_salary_is_sent_for_strong_company():
-    """Зарплаты нет, но компания сильная и тайтл точный ('HR Business Partner')."""
+def test_vacancy_without_salary_is_sent():
+    """Без зарплаты — треть подходящих вакансий (замер 2026-09-12), шлём их."""
     assert decide(vacancy(salary=None), RULES).send is True
 
 
-def test_vacancy_without_salary_needs_exact_title():
-    """Комбо-тайтл без зарплаты не берём: бренд вытягивает скор, роль может быть любой."""
-    combo = vacancy(name="Руководитель направления обучения персонала", salary=None)
-    assert decide(combo, RULES).reason == "salary"
-    assert decide(vacancy(name="Руководитель направления обучения персонала"), RULES).send is True
-
-
-def test_vacancy_without_salary_is_rejected_for_weak_company():
-    """Зарплаты нет — вилка «скор ↔ зарплата» не работает; пускаем только 💎/🔥."""
-    weak = vacancy(
+def test_vacancy_without_salary_is_sent_for_mid_company():
+    mid = vacancy(
         employer={"rating": 4.0, "reviews_count": 40, "has_logo": False, "branding": False},
         salary=None,
     )
-    d = decide(weak, RULES)
-    assert (d.send, d.reason, d.tier) == (False, "salary", "⚪")
+    d = decide(mid, RULES)
+    assert (d.send, d.tier) == (True, "⚪")
 
 
-def test_empty_compensation_counts_as_no_salary():
+def test_vacancy_without_salary_is_sent_for_combo_title():
+    combo = vacancy(name="Руководитель направления обучения персонала", salary=None)
+    assert decide(combo, RULES).send is True
+
+
+def test_empty_compensation_is_shown_as_dash():
     """hh отдаёт compensation с пустыми from/to — это «зарплата не указана»."""
+    d = decide(vacancy(salary={"from": None, "to": None, "currency": "RUR"}), RULES)
+    assert (d.send, d.salary_text, d.bold) == (True, "-", False)
+
+
+def test_weak_company_is_still_rejected_without_salary():
     weak = vacancy(
-        employer={"rating": 4.0, "reviews_count": 40, "has_logo": False, "branding": False},
-        salary={"from": None, "to": None, "currency": "RUR"},
+        employer={"rating": 3.2, "reviews_count": 60, "has_logo": False, "branding": False},
+        salary=None,
     )
-    assert decide(weak, RULES).reason == "salary"
+    assert decide(weak, RULES).reason == "company"
 
 
 def test_agency_is_marked_and_scored_lower():
