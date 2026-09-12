@@ -1072,12 +1072,15 @@ class BotContext:
         return fetch_hh_search(self.session, params, max_pages=max_pages)
 
 
-def get_smart_sleep_time():
+def get_smart_sleep_time(weekend_like_weekday=False):
+    """Пауза до следующего цикла. weekend_like_weekday=True — суббота и воскресенье
+    работают по будничному расписанию (HR-бот: вакансии постят и в выходные)."""
     now = get_moscow_time()
-    if now.weekday() == 6 and now.hour >= 20:
+    is_weekend = now.weekday() >= 5 and not weekend_like_weekday
+    if not weekend_like_weekday and now.weekday() == 6 and now.hour >= 20:
         target = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
         return (target - now).total_seconds(), target
-    if now.weekday() >= 5:
+    if is_weekend:
         if now.hour < 11:
             target = now.replace(hour=11, minute=0, second=0, microsecond=0) + timedelta(minutes=random.randint(0, 30))
         elif now.hour < 23:

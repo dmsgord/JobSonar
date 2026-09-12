@@ -142,7 +142,8 @@ def main_loop():
             sent = run_cycle()
 
             now = get_moscow_time()
-            seconds, next_run = get_smart_sleep_time()
+            # HR: выходные работают как будни — вакансии постят и в субботу
+            seconds, next_run = get_smart_sleep_time(weekend_like_weekday=True)
             stats = get_daily_stats()
             total = sum(stats.values())
             today = now.date()
