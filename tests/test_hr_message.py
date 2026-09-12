@@ -74,6 +74,11 @@ def test_large_group_is_split_into_chunks():
     assert all("Тест Компани" in m[0] for m in msgs)
 
 
+def test_blank_line_between_title_and_details():
+    text, _ids, _tier = build_messages([(item("1", "HRD"), decision())])[0]
+    assert "</a>\n\n📌" in text
+
+
 def test_agency_is_marked_in_header():
     agency_item = item("1", "HRD")
     agency_item["employer"]["category"] = "AGENCY"

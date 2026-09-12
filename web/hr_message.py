@@ -22,7 +22,7 @@ def _vacancy_block(item, decision):
     salary_html = f"<b>{decision.salary_text}</b>" if decision.bold else decision.salary_text
     experience = (decision.experience or {}).get('name', '')
     return (
-        f"<a href='{item['alternate_url']}'><b>{item['name']}</b></a>\n"
+        f"<a href='{item['alternate_url']}'><b>{item['name']}</b></a>\n\n"
         f"📌 {', '.join(decision.details)} | 🎓 {experience}\n"
         f"💰 {salary_html} | 🗓 {format_pub_date(item)}"
     )
