@@ -62,17 +62,36 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-def send_telegram(token, chat_id, text):
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
-            timeout=10
-        )
-        if not r.ok:
+def send_telegram(token, chat_id, text, attempts=3):
+    """Отправляет сообщение. True — доставлено, False — нет.
+
+    429 от телеги (групповой лимит ~20 сообщений в минуту) раньше просто писался
+    в лог, а вакансия всё равно помечалась отправленной — то есть терялась. Теперь
+    ждём `retry_after` и повторяем; вызывающий код отмечает отправку только по True.
+    """
+    for attempt in range(attempts):
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
+                timeout=10
+            )
+            if r.ok:
+                return True
+            if r.status_code == 429:
+                try:
+                    retry_after = int(r.json().get("parameters", {}).get("retry_after", 5))
+                except Exception:
+                    retry_after = 5
+                logging.warning(f"TG 429, жду {retry_after}с (попытка {attempt + 1}/{attempts})")
+                time.sleep(retry_after + 1)
+                continue
             logging.warning(f"TG send failed: {r.status_code} {r.text[:200]}")
-    except Exception as e:
-        logging.warning(f"TG send error: {e}")
+            return False
+        except Exception as e:
+            logging.warning(f"TG send error: {e}")
+            time.sleep(2)
+    return False
 
 
 def init_updates(token):
@@ -1058,7 +1077,7 @@ class BotContext:
         set_status(self.status_file, text)
 
     def send_telegram(self, text: str):
-        send_telegram(self.token, self.chat_id, text)
+        return send_telegram(self.token, self.chat_id, text)
 
     def check_remote_stop(self):
         self.last_update_id = check_remote_stop(

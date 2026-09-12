@@ -39,6 +39,9 @@ DB_PATH = os.path.join(BASE_DIR, DB_NAME)
 # period короткий — двух страниц хватает даже осям Москвы.
 MAX_PAGES = 2
 
+# Пауза между сообщениями: у групп лимит ~20 сообщений в минуту, за ним начинается 429
+SEND_PAUSE = 3.5
+
 bot = BotContext(TG_TOKEN, TG_CHAT_ID, STATUS_FILE, DB_PATH)
 
 
@@ -46,7 +49,7 @@ def set_status(text):
     bot.set_status(text)
 
 def send_telegram(text):
-    bot.send_telegram(text)
+    return bot.send_telegram(text)
 
 def check_remote_stop():
     bot.check_remote_stop()
@@ -95,12 +98,15 @@ def publish(accepted):
     """Шлёт отобранное: вакансии одной компании уходят одним сообщением."""
     sent = 0
     for text, vac_ids, tier in build_messages(accepted):
-        send_telegram(text)
+        if not send_telegram(text):
+            # Не доставлено — не помечаем: вакансия вернётся в следующем цикле
+            logging.warning(f"⚠️ HR не доставлено, вернём позже: {vac_ids}")
+            continue
         for vac_id in vac_ids:
             mark_as_sent(vac_id, category=tier)
         logging.info(f"✅ HR Sent [{tier}] {len(vac_ids)} вак.: {vac_ids}")
         sent += len(vac_ids)
-        time.sleep(0.5)
+        time.sleep(SEND_PAUSE)
     return sent
 
 
