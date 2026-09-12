@@ -168,6 +168,33 @@ def _parse_salary(salary_text):
     return {"from": sal_from, "to": sal_to, "currency": currency}
 
 
+# Иностранные регионы, которые лезут в remote-выдачу (path отсутствует в части ответов).
+# path вида ".113.…" = Россия; 113 — корневой area id РФ.
+RU_AREA_PATH_PREFIX = ".113."
+FOREIGN_AREA_IDS = {
+    "40",    # Казахстан (корень)
+    "159",   # Астана
+    "160",   # Алматы
+    "97",    # Узбекистан (корень)
+    "2759",  # Ташкент
+    "16",    # Беларусь (корень)
+    "1002",  # Минск
+    "5",     # Украина (корень)
+    "115",   # Киев
+    "28",    # Грузия
+    "9",     # Азербайджан
+    "48",    # Кыргызстан
+}
+
+
+def is_russian_area(area):
+    """True, если регион вакансии в России. Ташкент/Алматы/Бишкек режем."""
+    path = (area or {}).get("path") or ""
+    if path:
+        return path.startswith(RU_AREA_PATH_PREFIX)
+    return str((area or {}).get("id", "")) not in FOREIGN_AREA_IDS
+
+
 def _area_id_from_name(area_name):
     """Возвращает area_id по названию города, или '0' если не найден."""
     name_lower = area_name.lower()
@@ -248,10 +275,19 @@ def _normalize_vacancy(raw):
     name = raw.get("name", "")
     url = (raw.get("links") or {}).get("desktop", f"https://hh.ru/vacancy/{vac_id}")
 
-    # Работодатель
+    # Работодатель + сигналы качества: рейтинг Dream Job, отзывы, тип, платные маркеры.
+    # Всё это есть прямо в списочной выдаче — скорингу (scoring.py) доп. запросы не нужны.
     comp = raw.get("company", raw.get("employer", {}))
     emp_id = str(comp.get("id", ""))
     emp_name = comp.get("visibleName", comp.get("name", ""))
+
+    reviews = comp.get("employerReviews") or {}
+    try:
+        rating = float(reviews.get("totalRating")) if reviews.get("totalRating") else None
+    except (TypeError, ValueError):
+        rating = None
+    reviews_count = int(reviews.get("reviewsCount") or 0)
+    logos = comp.get("logos") or {}
 
     # Зарплата — compensation.currencyCode → currency, нет "to" в базовых данных
     comp_raw = raw.get("compensation", raw.get("salary"))
@@ -268,6 +304,7 @@ def _normalize_vacancy(raw):
     area_raw = raw.get("area", {})
     area_id = str(area_raw.get("@id", area_raw.get("id", 0)))
     area_name = area_raw.get("name", "")
+    area_path = area_raw.get("path", "")
 
     # Опыт — workExperience: "between3And6" | "noExperience" | ...
     EXP_MAP = {
@@ -319,9 +356,20 @@ def _normalize_vacancy(raw):
         "id": vac_id,
         "name": name,
         "alternate_url": url,
-        "employer": {"id": emp_id, "name": emp_name},
+        "employer": {
+            "id": emp_id,
+            "name": emp_name,
+            "rating": rating,
+            "reviews_count": reviews_count,
+            "category": comp.get("@category", comp.get("type", "COMPANY")),
+            "trusted": bool(comp.get("@trusted", False)),
+            "accredited_it": bool(comp.get("accreditedITEmployer", False)),
+            "has_logo": bool(logos.get("logo")),
+            "branding": bool(raw.get("branding")),
+            "on_additional_check": bool(comp.get("employerOnAdditionalCheck", False)),
+        },
         "salary": salary,
-        "area": {"id": area_id, "name": area_name},
+        "area": {"id": area_id, "name": area_name, "path": area_path},
         "schedule": schedule,
         "work_format": work_format,
         "experience": experience,
@@ -440,7 +488,8 @@ def fetch_hh_paginated(session, text, period=7, schedule=None, area=None, max_pa
         params["area"] = area
     # Новый параметр вместо deprecated schedule=remote
     if schedule == "remote":
-        params["work_format"] = "remote"
+        # Регистр значим: hh игнорит work_format=remote и отдаёт выдачу без фильтра
+        params["work_format"] = "REMOTE"
     elif schedule:
         params["schedule"] = schedule
 
@@ -468,7 +517,8 @@ def fetch_company_vacancies(session, employer_ids, area=None, schedule=None, per
     if period:
         params["period"] = period
     if schedule == "remote":
-        params["work_format"] = "remote"
+        # Регистр значим: hh игнорит work_format=remote и отдаёт выдачу без фильтра
+        params["work_format"] = "REMOTE"
     elif schedule:
         params["schedule"] = schedule
 
