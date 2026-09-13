@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Сообщения в Telegram: несколько вакансий одной компании — одним сообщением."""
 from hr_filter import Decision
-from hr_message import MAX_VACANCIES_PER_MESSAGE, build_messages
+from hr_message import MAX_VACANCIES_PER_MESSAGE, build_messages, format_details
 
 
 def item(vac_id, name, emp_id="777", emp_name="Тест Компани", rating=4.6, reviews=800):
@@ -91,6 +91,53 @@ def test_employer_without_rating_has_no_star():
     text, _ids, _tier = build_messages([(plain, decision())])[0]
     assert "★" not in text
     assert "💬" not in text
+
+
+def test_experience_is_not_shown():
+    """Опыт учтён в отборе — в карточке он только занимает место."""
+    text, _ids, _tier = build_messages([(item("1", "HRD"), decision())])[0]
+    assert "🎓" not in text
+    assert "От 3 до 6 лет" not in text
+
+
+def test_details_keep_only_remote_and_hybrid():
+    assert format_details(["Полный день", "На месте работодателя", "Гибрид"]) == "Гибрид"
+    assert format_details(["Удалённо", "Гибрид"]) == "Удалённо, Гибрид"
+    assert format_details(["Удалённо"]) == "Удалённо"
+    assert format_details(["Полный день", "На месте работодателя"]) == ""
+    assert format_details(["Сменный", "Разъездной"]) == ""
+    # офис в перечне не мешает: показываем только то, ради чего вакансию взяли
+    assert format_details(["На месте работодателя", "Удалённо"]) == "Удалённо"
+    assert format_details(["Удалённо", "Разъездной"]) == "Удалённо"
+    assert format_details(["Полный день", "На месте работодателя",
+                           "Удалённо", "Гибрид"]) == "Удалённо, Гибрид"
+
+
+def test_both_formats_are_printed():
+    """Есть и удалёнка, и гибрид — пишем оба слова, порядок как отдал hh."""
+    d = decision()._replace(details=["Полный день", "Удалённо", "Гибрид"])
+    text, _ids, _tier = build_messages([(item("1", "HRD"), d)])[0]
+    assert "📌 Удалённо, Гибрид\n" in text
+
+
+def test_details_line_dropped_when_nothing_to_show():
+    """Пустая 📌-строка не остаётся: без удалёнки/гибрида её просто нет."""
+    d = decision()._replace(details=["Полный день", "На месте работодателя"])
+    text, _ids, _tier = build_messages([(item("1", "HRD"), d)])[0]
+    assert "📌" not in text
+    assert "</a>\n\n💰" in text
+
+
+def test_it_accredited_employer_is_marked():
+    it_item = item("1", "HRD")
+    it_item["employer"]["accredited_it"] = True
+    text, _ids, _tier = build_messages([(it_item, decision())])[0]
+    assert "· IT" in text
+
+
+def test_non_it_employer_has_no_it_mark():
+    text, _ids, _tier = build_messages([(item("1", "HRD"), decision())])[0]
+    assert "· IT" not in text
 
 
 def test_message_fits_telegram_limit():

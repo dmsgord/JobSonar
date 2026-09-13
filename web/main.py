@@ -22,8 +22,9 @@ logging.basicConfig(
 
 from config import TG_TOKEN, TG_CHAT_ID, PROFILES, DB_NAME, AXIS_SEARCH_PERIOD
 from config_coo import COO_PROFILES
+from config_itrec import ITREC_PROFILES
 from db import init_db, is_sent, mark_as_sent, get_daily_stats
-from employers import init_employer_cache, remember_employer, top_employers
+from employers import init_employer_cache, remember_employer
 from hr_filter import decide
 from hr_message import build_messages
 from hr_search import HR_PROFESSIONAL_ROLES, SEARCH_AXES, build_axis_queries
@@ -32,7 +33,7 @@ from utils import (
     report_error, send_daily_stats
 )
 
-ALL_PROFILES = {**COO_PROFILES, **PROFILES}
+ALL_PROFILES = {**COO_PROFILES, **ITREC_PROFILES, **PROFILES}
 DB_PATH = os.path.join(BASE_DIR, DB_NAME)
 
 # Сколько страниц читаем на запрос. Страница hh ≈ 50 вакансий (per_page игнорируется),
@@ -82,8 +83,8 @@ def collect_matches(items, rules, seen_ids):
 
         decision = decide(item, rules)
 
-        # Работодателя запоминаем, как только дошли до скоринга — так виден топ
-        # и понятно, кого бот режет по зарплате.
+        # Работодателя запоминаем, как только дошли до скоринга: скор остаётся
+        # стабильным между циклами и видно, кого бот режет по зарплате.
         if decision.reason in ("ok", "salary", "company"):
             emp = item.get('employer', {})
             if emp.get('id'):
@@ -139,9 +140,13 @@ def run_cycle():
         items = bot.fetch_hh_search(params, max_pages=MAX_PAGES)
         logging.info(f"🌐 {axis_name} [{i}/{len(queries)}] items={len(items)}")
 
-        accepted = []
+        # Вакансия может подойти сразу двум профилям (HR и COO) — в сообщение она
+        # должна попасть один раз, поэтому схлопываем по id вакансии.
+        accepted_by_id = {}
         for _role, rules in ALL_PROFILES.items():
-            accepted.extend(collect_matches(items, rules, seen_ids))
+            for item, decision in collect_matches(items, rules, seen_ids):
+                accepted_by_id.setdefault(item['id'], (item, decision))
+        accepted = list(accepted_by_id.values())
         # Публикуем сразу после запроса, а не в конце цикла: группировка по компании
         # всё равно работает внутри одной выдачи, зато падение цикла не съедает отправку.
         batch_sent, batch_delivered = publish(accepted)
@@ -181,10 +186,6 @@ def main_loop():
 
             if now.hour >= 23 and last_stats_date != today:
                 send_daily_stats("HR", TG_TOKEN, TG_CHAT_ID, stats)
-                top = top_employers(DB_PATH, limit=5)
-                if top:
-                    lines = "\n".join(f"{r['score']} — {r['name']}" for r in top)
-                    send_telegram(f"🏅 <b>Топ работодателей по скорингу</b>\n{lines}")
                 last_stats_date = today
 
             set_status(f"💤 Сон до {next_run.strftime('%H:%M')}. За цикл: {sent}, за сегодня: {total}")

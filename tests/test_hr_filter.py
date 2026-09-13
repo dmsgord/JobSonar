@@ -83,6 +83,98 @@ def test_remote_vacancy_anywhere_in_russia_is_accepted():
     assert decide(kazan_remote, RULES).send is True
 
 
+def office(**kw):
+    """Чистый офис: schedule «Полный день» + work_format «На месте работодателя»."""
+    return vacancy(
+        schedule={"id": "fullDay", "name": "Полный день"},
+        work_format=[{"id": "onSite", "name": "На месте работодателя"}],
+        **kw
+    )
+
+
+def test_office_vacancy_in_moscow_rejects():
+    """Полный офис не нужен даже в целевом городе — нужна удалёнка или гибрид."""
+    assert decide(office(), RULES).reason == "geo"
+
+
+def test_office_vacancy_in_nizhny_novgorod_rejects():
+    nn = office(area={"id": "66", "name": "Нижний Новгород", "path": ".113.1679.66."})
+    assert decide(nn, RULES).reason == "geo"
+
+
+def test_hybrid_in_moscow_is_accepted():
+    hybrid = vacancy(
+        schedule={"id": "fullDay", "name": "Полный день"},
+        work_format=[{"id": "onSite", "name": "На месте работодателя"},
+                     {"id": "hybrid", "name": "Гибрид"}],
+    )
+    assert decide(hybrid, RULES).send is True
+
+
+def test_hybrid_in_nizhny_novgorod_is_accepted():
+    hybrid = vacancy(
+        area={"id": "66", "name": "Нижний Новгород", "path": ".113.1679.66."},
+        schedule={"id": "fullDay", "name": "Полный день"},
+        work_format=[{"id": "hybrid", "name": "Гибрид"}],
+    )
+    assert decide(hybrid, RULES).send is True
+
+
+def test_office_plus_hybrid_is_accepted():
+    """Частый случай hh: «Полный день, На месте работодателя, Гибрид».
+
+    Офис в перечне не отменяет гибрид — режем только тех, у кого КРОМЕ офиса
+    ничего нет. Замер по живой выдаче: таких смешанных — 35 из 285.
+    """
+    mixed = vacancy(
+        schedule={"id": "fullDay", "name": "Полный день"},
+        work_format=[{"id": "onSite", "name": "На месте работодателя"},
+                     {"id": "hybrid", "name": "Гибрид"}],
+    )
+    assert decide(mixed, RULES).send is True
+
+
+def test_office_plus_remote_is_accepted_outside_target_cities():
+    """«На месте работодателя, Удалённо» — удалёнка есть, значит подходит из любого города."""
+    mixed = vacancy(
+        area={"id": "88", "name": "Казань", "path": ".113.1624.88."},
+        schedule={"id": "fullDay", "name": "Полный день"},
+        work_format=[{"id": "onSite", "name": "На месте работодателя"},
+                     {"id": "remote", "name": "Удалённо"}],
+    )
+    assert decide(mixed, RULES).send is True
+
+
+def test_field_plus_remote_is_accepted():
+    """«Удалённо, Разъездной» — тоже оставляем: удалёнка в перечне есть."""
+    mixed = vacancy(
+        area={"id": "88", "name": "Казань", "path": ".113.1624.88."},
+        schedule={"id": "remote", "name": "Удалённо"},
+        work_format=[{"id": "remote", "name": "Удалённо"},
+                     {"id": "field", "name": "Разъездной"}],
+    )
+    assert decide(mixed, RULES).send is True
+
+
+def test_hybrid_outside_target_cities_rejects():
+    """Гибрид в Казани — ездить туда некому, шлём только удалёнку."""
+    kazan_hybrid = vacancy(
+        area={"id": "88", "name": "Казань", "path": ".113.1624.88."},
+        schedule={"id": "fullDay", "name": "Полный день"},
+        work_format=[{"id": "hybrid", "name": "Гибрид"}],
+    )
+    assert decide(kazan_hybrid, RULES).reason == "geo"
+
+
+def test_field_work_rejects():
+    """«Разъездной» — тоже не удалёнка и не гибрид."""
+    field = vacancy(
+        schedule={"id": "fullDay", "name": "Полный день"},
+        work_format=[{"id": "field", "name": "Разъездной"}],
+    )
+    assert decide(field, RULES).reason == "geo"
+
+
 def test_private_individual_rejects():
     assert decide(vacancy(employer={"category": "PRIVATE_INDIVIDUAL"}), RULES).reason == "company"
 

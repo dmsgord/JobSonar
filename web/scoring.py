@@ -60,8 +60,12 @@ def _reviews_points(reviews_count):
     return 0
 
 
-def score_employer(employer, salary=None):
-    """0–100, либо SKIP для работодателей, которых не шлём никогда."""
+def score_employer(employer, salary=None, agency_penalty=True):
+    """0–100, либо SKIP для работодателей, которых не шлём никогда.
+
+    agency_penalty=False — для профилей, где агентство нормальный работодатель
+    (IT-рекрутера кадровые агентства нанимают чаще всех, штраф выбивал их зря).
+    """
     if employer.get("on_additional_check"):
         return SKIP
     if employer.get("category") in SKIP_CATEGORIES:
@@ -77,7 +81,7 @@ def score_employer(employer, salary=None):
         score += 3
     if employer.get("accredited_it"):
         score += 8
-    if employer.get("category") == "AGENCY":
+    if agency_penalty and employer.get("category") == "AGENCY":
         score -= 20
 
     if salary:

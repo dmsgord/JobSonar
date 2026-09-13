@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Решение по одной вакансии HR-бота — чистая функция, без сети и БД.
 
-Порядок ворот: заголовок → опыт → гео → качество компании → зарплата.
-Зарплатная планка не фиксированная: её задаёт скор работодателя (scoring.py),
-поэтому у сильной компании проходит 200k, у слабой не проходит и 290k.
+Порядок ворот: заголовок → опыт → формат работы + гео → качество компании → зарплата.
+Формат: удалёнка — из любого города РФ, гибрид — только Москва/НН. Чистый офис
+(«На месте работодателя», «Разъездной») не шлём вообще: это полный офис, а он не нужен.
+Зарплатная планка одна для всех, скор компании решает только «шлём или нет».
 """
 from collections import namedtuple
 
@@ -15,10 +16,36 @@ from utils import (
 )
 
 Decision = namedtuple(
-    "Decision", "send reason tier score salary_text bold details experience"
+    "Decision", "send reason tier score salary_text bold details experience mark",
+    defaults=("",),   # mark — значок профиля в карточке, есть не у всех профилей
 )
 
-OFFICE_MARKERS = ("офис", "на месте", "office", "гибрид", "hybrid", "разъездной")
+REMOTE_MARKERS = ("удал", "remote")
+HYBRID_MARKERS = ("гибрид", "hybrid")
+
+
+def _has(text, markers):
+    return any(m in text for m in markers)
+
+
+def _lower_bound_ok(salary, threshold):
+    """Профили с salary_lower_only: годится «от N ≥ порога» или зарплата не указана.
+
+    «до 150000» не годится — верхняя граница ничего не обещает. Зарплату без
+    указания пропускаем: у трети вакансий hh её нет вовсе, резать их — потерять класс.
+    """
+    if not salary:
+        return True
+    lower, upper = salary.get("from"), salary.get("to")
+    # hh отдаёт compensation объектом даже когда зарплаты нет: {"currencyCode": "RUR"}.
+    # Такой словарь truthy, но зарплата в нём не указана — это «нет данных», не «до N».
+    if not lower and not upper:
+        return True
+    if not lower:
+        return False
+    if salary.get("currency") != "RUR":
+        return True
+    return lower >= threshold
 
 
 def _reject(reason, score=0):
@@ -45,11 +72,14 @@ def decide(item, rules, target_areas=TARGET_AREAS):
         return _reject("title")
 
     experience = item.get("experience", {})
-    if experience.get("id") == "noExperience":
+    # «Нет опыта» на hh часто стоит формально. Профилям, где это режет живые
+    # вакансии сильных компаний (IT-рекрутер), ворота можно открыть.
+    if experience.get("id") == "noExperience" and not rules.get("allow_no_experience"):
         return _reject("title")
 
     details, details_text = build_details(item)
-    is_remote = "удал" in details_text or "remote" in details_text
+    is_remote = _has(details_text, REMOTE_MARKERS)
+    is_hybrid = _has(details_text, HYBRID_MARKERS)
 
     area = item.get("area", {})
     if not is_russian_area(area):
@@ -57,7 +87,13 @@ def decide(item, rules, target_areas=TARGET_AREAS):
 
     area_name = (area.get("name") or "").lower()
     is_target_area = str(area.get("id", "")) in target_areas or "москв" in area_name
-    if not is_target_area and not is_remote:
+    if rules.get("remote_only"):
+        # IT-рекрутер нужен только на удалёнке — гибрид не подходит даже в Москве
+        if not is_remote:
+            return _reject("geo")
+    # Удалёнка — из любого города РФ. Гибрид — только Москва/НН, туда реально ездить.
+    # Всё остальное («Полный день + На месте работодателя», «Разъездной») — офис, режем.
+    elif not (is_remote or (is_hybrid and is_target_area)):
         return _reject("geo")
 
     employer = item.get("employer", {})
@@ -65,13 +101,17 @@ def decide(item, rules, target_areas=TARGET_AREAS):
         return _reject("company")
 
     salary = item.get("salary")
-    score = score_employer(employer, salary=salary)
+    score = score_employer(employer, salary=salary,
+                           agency_penalty=not rules.get("agency_ok"))
     ok, tier, threshold, score = quality_gate(employer, salary=salary, score=score)
     if not ok:
         return _reject("company", score)
 
+    mark = rules.get("mark", "")
     salary_text, is_bold, skip_salary = format_salary(salary, threshold, bold_from=BOLD_SALARY_FROM)
     if skip_salary:
-        return Decision(False, "salary", tier, score, salary_text, is_bold, details, experience)
+        return Decision(False, "salary", tier, score, salary_text, is_bold, details, experience, mark)
+    if rules.get("salary_lower_only") and not _lower_bound_ok(salary, threshold):
+        return Decision(False, "salary", tier, score, salary_text, is_bold, details, experience, mark)
 
-    return Decision(True, "ok", tier, score, salary_text, is_bold, details, experience)
+    return Decision(True, "ok", tier, score, salary_text, is_bold, details, experience, mark)

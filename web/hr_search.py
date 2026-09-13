@@ -28,11 +28,17 @@ def or_batches(phrases, size=OR_BATCH_SIZE):
 
 
 def build_axis_queries(axes, profiles, professional_roles, period=3, batch_size=OR_BATCH_SIZE):
-    """[(имя_оси, params для fetch_hh_search)] — ключевики всех профилей + роли, на каждой оси."""
+    """[(имя_оси, params для fetch_hh_search)] — ключевики всех профилей + роли, на каждой оси.
+
+    Профиль с remote_only (IT-рекрутер) гоняется только по оси удалёнки: на осях
+    Москвы и НН он всё равно отсеет всё по формату, а запросы к hh стоят денег.
+    """
     queries = []
     for axis in axes:
         axis_name = axis["name"]
         for profile in profiles.values():
+            if profile.get("remote_only") and axis_name != "remote_rf":
+                continue
             for orq in or_batches(profile.get("keywords", []), size=batch_size):
                 params = dict(axis["params"])
                 params.update({"text": orq, "search_field": "name", "period": period})
